@@ -1,0 +1,214 @@
+.restaurant-detail {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+.back-button {
+  padding: 0.75rem 1.5rem;
+  background: #f5f5f5;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 1rem;
+  margin-bottom: 2rem;
+  transition: background 0.3s;
+}
+
+.back-button:hover {
+  background: #e0e0e0;
+}
+
+.restaurant-header {
+  background: white;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  margin-bottom: 2rem;
+}
+
+.restaurant-image {
+  width: 100%;
+  max-height: 400px;
+  object-fit: cover;
+}
+
+.restaurant-info {
+  padding: 2rem;
+}
+
+.restaurant-info h1 {
+  font-size: 2rem;
+  margin-bottom: 1rem;
+  color: #333;
+}
+
+.restaurant-meta {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.rating {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.1rem;
+}
+
+.review-count {
+  color: #666;
+  font-size: 0.9rem;
+}
+
+.price-level {
+  color: #4caf50;
+  font-size: 1.2rem;
+  font-weight: 600;
+}
+
+.restaurant-actions {
+  display: flex;
+  gap: 1rem;
+}
+
+.restaurant-details {
+  background: white;
+  border-radius: 12px;
+  padding: 2rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.detail-section {
+  margin-bottom: 2rem;
+  padding-bottom: 2rem;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.detail-section:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.detail-section h3 {
+  font-size: 1.2rem;
+  margin-bottom: 0.75rem;
+  color: #333;
+}
+
+.detail-section p {
+  color: #666;
+  line-height: 1.6;
+}
+
+.detail-section a {
+  color: #667eea;
+  text-decoration: none;
+}
+
+.detail-section a:hover {
+  text-decoration: underline;
+}
+
+.opening-hours {
+  margin-top: 0.5rem;
+}
+
+.open-status {
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  display: inline-block;
+  margin-bottom: 1rem;
+  font-weight: 600;
+}
+
+.open-status.open {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+.open-status.closed {
+  background: #ffebee;
+  color: #c62828;
+}
+
+.opening-hours ul {
+  list-style: none;
+  padding: 0;
+}
+
+.opening-hours li {
+  padding: 0.5rem 0;
+  color: #666;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.opening-hours li:last-child {
+  border-bottom: none;
+}
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.tag {
+  background: #f5f5f5;
+  padding: 0.5rem 1rem;
+  border-radius: 20px;
+  font-size: 0.875rem;
+  color: #666;
+}
+
+.map-container {
+  border-radius: 8px;
+  overflow: hidden;
+  margin-top: 1rem;
+}
+
+.map-placeholder {
+  height: 300px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #f5f5f5;
+  border-radius: 8px;
+  color: #666;
+}
+
+.map-link {
+  margin-top: 1rem;
+  padding: 0.75rem 1.5rem;
+  background: #667eea;
+  color: white;
+  text-decoration: none;
+  border-radius: 6px;
+  transition: background 0.3s;
+}
+
+.map-link:hover {
+  background: #5568d3;
+}
+
+@media (max-width: 768px) {
+  .restaurant-detail {
+    padding: 1rem;
+  }
+
+  .restaurant-info {
+    padding: 1.5rem;
+  }
+
+  .restaurant-info h1 {
+    font-size: 1.5rem;
+  }
+
+  .restaurant-actions {
+    flex-direction: column;
+  }
+}
+
