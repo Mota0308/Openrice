@@ -12,7 +12,19 @@ const PORT = process.env.PORT || 5000;
 // Middleware
 // CORS 配置 - 允許前端域名
 const corsOptions = {
-  origin: process.env.FRONTEND_URL || '*',
+  origin: function (origin, callback) {
+    // 允许的前端 URL 列表
+    const allowedOrigins = process.env.FRONTEND_URL 
+      ? process.env.FRONTEND_URL.split(',').map(url => url.trim())
+      : ['*'];
+    
+    // 如果没有 origin（如 Postman 直接请求），允许
+    if (!origin || allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
   optionsSuccessStatus: 200
 };
