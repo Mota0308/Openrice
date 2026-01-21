@@ -165,6 +165,7 @@ function RestaurantDetail({ userId }) {
             <div className="map-container">
               {process.env.REACT_APP_GOOGLE_MAPS_API_KEY ? (
                 <iframe
+                  title={`${restaurant.name} 位置地圖`}
                   width="100%"
                   height="300"
                   style={{ border: 0 }}
