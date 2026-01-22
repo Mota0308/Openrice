@@ -7,7 +7,7 @@
 1. Railway 帳號（訪問 https://railway.app/ 註冊）
 2. GitHub 帳號（用於連接代碼倉庫）
 3. MongoDB Atlas 帳號（用於雲端數據庫）
-4. OpenAI API Key
+4. Google Gemini API Key（推薦）或 OpenAI API Key
 5. Google Maps API Key
 
 ## 部署步驟
@@ -43,8 +43,18 @@ git push -u origin main
 ```
 PORT=5000
 MONGODB_URI=<your-mongodb-atlas-connection-string>
-OPENAI_API_KEY=<your-openai-api-key>
 GOOGLE_MAPS_API_KEY=<your-google-maps-api-key>
+
+# AI 提供商配置（二選一）
+# 選項 1：使用 Google Gemini（推薦，免費額度大）
+AI_PROVIDER=gemini
+GEMINI_API_KEY=<your-gemini-api-key>
+GEMINI_MODEL=gemini-pro
+
+# 選項 2：使用 OpenAI
+# AI_PROVIDER=openai
+# OPENAI_API_KEY=<your-openai-api-key>
+# OPENAI_MODEL=gpt-4o-mini
 ```
 
 #### 可選環境變量
@@ -53,9 +63,42 @@ GOOGLE_MAPS_API_KEY=<your-google-maps-api-key>
 FRONTEND_URL=<your-frontend-url>
 # 例如：https://your-frontend.vercel.app
 # 如果不設置，CORS 將允許所有來源（僅用於開發）
+
+# 網站抓取配置（可選）
+ENABLE_WEBSITE_SCRAPE=true
+EVIDENCE_CACHE_TTL_MS=21600000
+EVIDENCE_MAX_PLACES=3
 ```
 
-### 4. 獲取 MongoDB Atlas 連接字符串
+### 4. 獲取 Google Gemini API Key（推薦）
+
+**為什麼選擇 Gemini？**
+- 免費額度大：每分鐘 60 次請求，每月 1500 次
+- 質量接近 GPT-4
+- 價格便宜（超過免費額度後）
+- 支持繁體中文
+
+**獲取步驟：**
+1. 訪問 https://aistudio.google.com/app/apikey
+2. 使用 Google 帳號登錄
+3. 點擊 "Create API Key"
+4. 複製 API Key
+5. 在 Railway 環境變量中添加：
+   - `AI_PROVIDER=gemini`
+   - `GEMINI_API_KEY=<your-gemini-api-key>`
+   - `GEMINI_MODEL=gemini-pro`（可選，默認值）
+
+**或者使用 OpenAI：**
+1. 訪問 https://platform.openai.com/
+2. 註冊或登錄帳號
+3. 前往 API Keys 頁面
+4. 創建新的 API Key
+5. 在 Railway 環境變量中添加：
+   - `AI_PROVIDER=openai`
+   - `OPENAI_API_KEY=<your-openai-api-key>`
+   - `OPENAI_MODEL=gpt-4o-mini`（可選）
+
+### 5. 獲取 MongoDB Atlas 連接字符串
 
 1. 訪問 https://www.mongodb.com/cloud/atlas
 2. 創建或選擇您的集群
@@ -70,7 +113,7 @@ FRONTEND_URL=<your-frontend-url>
 mongodb+srv://username:password@cluster0.xxxxx.mongodb.net/openrice?retryWrites=true&w=majority
 ```
 
-### 5. 配置 Railway 構建設置
+### 6. 配置 Railway 構建設置
 
 Railway 會自動檢測到 `server` 目錄，但您可能需要手動配置：
 
@@ -79,18 +122,18 @@ Railway 會自動檢測到 `server` 目錄，但您可能需要手動配置：
 3. 設置 **Build Command** 為 `npm install`（通常自動檢測）
 4. 設置 **Start Command** 為 `npm start`（通常自動檢測）
 
-### 6. 部署
+### 7. 部署
 
 Railway 會自動開始部署。您可以在 "Deployments" 標籤中查看部署日誌。
 
-### 7. 獲取部署 URL
+### 8. 獲取部署 URL
 
 部署完成後，Railway 會提供一個公共 URL，例如：
 ```
 https://your-app-name.up.railway.app
 ```
 
-### 8. 測試部署
+### 9. 測試部署
 
 訪問以下端點測試服務器：
 
@@ -160,7 +203,7 @@ REACT_APP_API_URL=https://your-app-name.up.railway.app
 
 ### API 錯誤
 
-1. 檢查 OpenAI API Key 是否有效
+1. 檢查 AI API Key 是否有效（Gemini 或 OpenAI）
 2. 檢查 Google Maps API Key 是否有效且已啟用所需服務
 3. 查看 Railway 日誌以獲取詳細錯誤信息
 
@@ -189,6 +232,7 @@ Railway 會自動檢測更改並重新部署。
 
 - [Railway 文檔](https://docs.railway.app/)
 - [MongoDB Atlas 文檔](https://docs.atlas.mongodb.com/)
+- [Google Gemini API 文檔](https://ai.google.dev/docs)
 - [OpenAI API 文檔](https://platform.openai.com/docs)
 - [Google Maps API 文檔](https://developers.google.com/maps/documentation)
 

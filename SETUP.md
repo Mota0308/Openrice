@@ -9,7 +9,19 @@
 ```env
 PORT=5000
 MONGODB_URI=mongodb://localhost:27017/openrice
+
+# AI 提供商選擇：'openai' 或 'gemini'（默認：gemini）
+AI_PROVIDER=gemini
+
+# Google Gemini API Key（推薦，免費額度大）
+GEMINI_API_KEY=your_gemini_api_key_here
+GEMINI_MODEL=gemini-pro
+
+# OpenAI API Key（可選，如果使用 OpenAI）
 OPENAI_API_KEY=your_openai_api_key_here
+OPENAI_MODEL=gpt-4o-mini
+
+# Google Maps API Key
 GOOGLE_MAPS_API_KEY=your_google_maps_api_key_here
 ```
 
@@ -23,15 +35,35 @@ REACT_APP_GOOGLE_MAPS_API_KEY=your_google_maps_api_key_here
 
 ## 獲取 API 密鑰
 
-### 1. OpenAI API Key
+### 1. Google Gemini API Key（推薦）
+
+**為什麼選擇 Gemini？**
+- 免費額度大：每分鐘 60 次請求，每月 1500 次
+- 質量接近 GPT-4
+- 價格便宜（超過免費額度後）
+- 支持繁體中文
+
+**獲取步驟：**
+1. 訪問 https://aistudio.google.com/app/apikey
+2. 使用 Google 帳號登錄
+3. 點擊 "Create API Key"
+4. 複製 API Key 並保存到 `server/.env` 文件的 `GEMINI_API_KEY`
+5. 設置 `AI_PROVIDER=gemini`（這是默認值）
+
+**注意：** 如果使用 Gemini，不需要設置 `OPENAI_API_KEY`。
+
+### 2. OpenAI API Key（可選）
+
+如果你想使用 OpenAI 而不是 Gemini：
 
 1. 訪問 https://platform.openai.com/
 2. 註冊或登錄帳號
 3. 前往 API Keys 頁面
 4. 創建新的 API Key
 5. 複製並保存到 `server/.env` 文件
+6. 設置 `AI_PROVIDER=openai`
 
-### 2. Google Maps API Key
+### 3. Google Maps API Key
 
 1. 訪問 https://console.cloud.google.com/
 2. 創建新項目或選擇現有項目

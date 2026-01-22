@@ -1,16 +1,122 @@
 const axios = require('axios');
 const OpenAI = require('openai');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 const Restaurant = require('../models/Restaurant');
 const { fetchEvidenceForPlaces } = require('../services/evidenceService');
 
-const openai = new OpenAI({
+// AI Provider 配置
+const AI_PROVIDER = process.env.AI_PROVIDER || 'gemini'; // 'openai' 或 'gemini'
+
+// OpenAI 初始化（如果使用）
+const openai = AI_PROVIDER === 'openai' ? new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
-});
+}) : null;
+
+// Gemini 初始化（如果使用）
+const genAI = AI_PROVIDER === 'gemini' && process.env.GEMINI_API_KEY 
+  ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
+  : null;
 
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 
 function getOpenAIModel() {
   return process.env.OPENAI_MODEL || 'gpt-4o-mini';
+}
+
+function getGeminiModel() {
+  return process.env.GEMINI_MODEL || 'gemini-pro';
+}
+
+// 统一的 AI 调用函数，支持 OpenAI 和 Gemini
+async function callAI(messages, systemPrompt, responseFormat = 'json_object') {
+  const provider = AI_PROVIDER.toLowerCase();
+  
+  if (provider === 'gemini') {
+    if (!genAI) {
+      throw new Error('Gemini API key not configured. Please set GEMINI_API_KEY environment variable.');
+    }
+    
+    const model = genAI.getGenerativeModel({ model: getGeminiModel() });
+    
+    // Gemini 使用不同的消息格式
+    // 将 system prompt 和 user messages 合并
+    let fullPrompt = systemPrompt ? `${systemPrompt}\n\n` : '';
+    
+    // 处理消息数组
+    for (const msg of messages) {
+      if (msg.role === 'system') {
+        fullPrompt += `${msg.content}\n\n`;
+      } else if (msg.role === 'user') {
+        fullPrompt += `${msg.content}\n\n`;
+      } else if (msg.role === 'assistant') {
+        // Gemini 不支持 assistant 消息在 prompt 中，跳过
+      }
+    }
+    
+    // 如果要求 JSON 格式，在 prompt 中明确说明
+    if (responseFormat === 'json_object') {
+      fullPrompt += '\n請以 JSON 格式回覆，不要包含任何 markdown 格式或其他文字。';
+    }
+    
+    try {
+      const result = await model.generateContent(fullPrompt);
+      const response = await result.response;
+      const text = response.text();
+      
+      // 清理可能的 markdown 代码块
+      let cleanedText = text.trim();
+      if (cleanedText.startsWith('```json')) {
+        cleanedText = cleanedText.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+      } else if (cleanedText.startsWith('```')) {
+        cleanedText = cleanedText.replace(/^```\s*/, '').replace(/\s*```$/, '');
+      }
+      
+      return {
+        content: cleanedText,
+        provider: 'gemini'
+      };
+    } catch (error) {
+      console.error('Gemini API error:', error.message);
+      throw error;
+    }
+  } else if (provider === 'openai') {
+    if (!openai) {
+      throw new Error('OpenAI API key not configured. Please set OPENAI_API_KEY environment variable.');
+    }
+    
+    // 合并 system prompt 到 messages
+    const formattedMessages = [];
+    if (systemPrompt) {
+      formattedMessages.push({
+        role: 'system',
+        content: systemPrompt
+      });
+    }
+    formattedMessages.push(...messages.filter(m => m.role !== 'system'));
+    
+    try {
+      const completion = await openai.chat.completions.create({
+        model: getOpenAIModel(),
+        response_format: responseFormat === 'json_object' ? { type: 'json_object' } : undefined,
+        messages: formattedMessages
+      });
+      
+      const content = completion?.choices?.[0]?.message?.content;
+      if (!content) {
+        throw new Error('OpenAI returned empty content');
+      }
+      
+      return {
+        content,
+        provider: 'openai'
+      };
+    } catch (error) {
+      console.error('OpenAI API error:', error.message);
+      throw error;
+    }
+  } else {
+    throw new Error(`Unsupported AI provider: ${provider}. Supported providers: 'openai', 'gemini'`);
+  }
 }
 
 function normalizePriceLevel(priceLevel) {
@@ -132,8 +238,12 @@ function buildFallbackExplanation(query, analysis, restaurants) {
 
 async function generateResultsExplanation(query, analysis, restaurants) {
   try {
-    if (!process.env.OPENAI_API_KEY) {
-      console.log('No OpenAI API key, using fallback explanation');
+    // 检查是否有可用的 AI API key
+    const hasOpenAI = AI_PROVIDER === 'openai' && process.env.OPENAI_API_KEY;
+    const hasGemini = AI_PROVIDER === 'gemini' && process.env.GEMINI_API_KEY;
+    
+    if (!hasOpenAI && !hasGemini) {
+      console.log(`No ${AI_PROVIDER} API key configured, using fallback explanation`);
       return buildFallbackExplanation(query, analysis, restaurants);
     }
 
@@ -204,32 +314,28 @@ async function generateResultsExplanation(query, analysis, restaurants) {
       };
     });
 
-    let completion;
+    let aiResponse;
     try {
-      console.log('Calling OpenAI API for explanation...');
-      completion = await openai.chat.completions.create({
-        model: getOpenAIModel(),
-        response_format: { type: 'json_object' },
-        messages: [
-          {
-            role: 'system',
-            content:
-              '你是餐廳推薦解說助手，要能「理解用戶意圖」後再解釋為什麼推薦。' +
-              '你只能根據輸入的餐廳資料（名稱/地址/評分/價位/類型/營業時間等）與使用者查詢/意圖來解釋；' +
-              '不要捏造店家真實菜單、確定的配料、裝潢細節、折扣、服務特色。' +
-              '如果 evidence 提供了「評論片段」或「官網菜單/段落」，你可以引用它們來做更有依據的推論；' +
-              '若沒有證據，請保持保守並標註為推測。' +
-              '【強制】每家餐廳的 highlights 必須包含至少 1 條「具體內容」：' +
-              '優先使用 evidence.website.menuItems / evidence.website.menuCandidates 的菜名；' +
-              '或引用 evidence.place.editorialSummary 的關鍵片語；' +
-              '或引用 evidence.place.reviews 的一小段（不要超過 20 字）。' +
-              '如果真的完全沒有任何具體證據，才可以用「類型/價位/是否營業」等資訊，但此時 confidence 必須是 low，且不要把評分當作主亮點。' +
-              '你可以給「可能適合嘗試」的菜式/配料/風格方向，但必須明確用推測語氣（例如：可能、或許、通常、建議先確認菜單）。' +
-              '【重要】避免模板化：每家餐廳的 reason 句式要有差異，不要全部只寫「評分高/評價多」。' +
-              '每家至少涵蓋 2 個角度（從：用戶意圖匹配、可能菜式/配料、風格/氛圍、評論證據、官網菜單證據、價位、是否營業中、類型匹配、熱度）。' +
-              '輸出 JSON：{summary: string, items: [{placeId: string, reason: string, highlights: string[], suggestedDishes: string[], suggestedIngredients: string[], suggestedStyle: string[], confidence: \"low\"|\"medium\"|\"high\", evidenceNotes: string[]}], disclaimer: string}。' +
-              '每家 reason 1-2 句話，highlights 3-5 點（要多樣化），文字用繁體中文。'
-          },
+      console.log(`Calling ${AI_PROVIDER.toUpperCase()} API for explanation...`);
+      
+      const systemPrompt = '你是餐廳推薦解說助手，要能「理解用戶意圖」後再解釋為什麼推薦。' +
+        '你只能根據輸入的餐廳資料（名稱/地址/評分/價位/類型/營業時間等）與使用者查詢/意圖來解釋；' +
+        '不要捏造店家真實菜單、確定的配料、裝潢細節、折扣、服務特色。' +
+        '如果 evidence 提供了「評論片段」或「官網菜單/段落」，你可以引用它們來做更有依據的推論；' +
+        '若沒有證據，請保持保守並標註為推測。' +
+        '【強制】每家餐廳的 highlights 必須包含至少 1 條「具體內容」：' +
+        '優先使用 evidence.website.menuItems / evidence.website.menuCandidates 的菜名；' +
+        '或引用 evidence.place.editorialSummary 的關鍵片語；' +
+        '或引用 evidence.place.reviews 的一小段（不要超過 20 字）。' +
+        '如果真的完全沒有任何具體證據，才可以用「類型/價位/是否營業」等資訊，但此時 confidence 必須是 low，且不要把評分當作主亮點。' +
+        '你可以給「可能適合嘗試」的菜式/配料/風格方向，但必須明確用推測語氣（例如：可能、或許、通常、建議先確認菜單）。' +
+        '【重要】避免模板化：每家餐廳的 reason 句式要有差異，不要全部只寫「評分高/評價多」。' +
+        '每家至少涵蓋 2 個角度（從：用戶意圖匹配、可能菜式/配料、風格/氛圍、評論證據、官網菜單證據、價位、是否營業中、類型匹配、熱度）。' +
+        '輸出 JSON：{summary: string, items: [{placeId: string, reason: string, highlights: string[], suggestedDishes: string[], suggestedIngredients: string[], suggestedStyle: string[], confidence: \"low\"|\"medium\"|\"high\", evidenceNotes: string[]}], disclaimer: string}。' +
+        '每家 reason 1-2 句話，highlights 3-5 點（要多樣化），文字用繁體中文。';
+      
+      aiResponse = await callAI(
+        [
           {
             role: 'user',
             content: JSON.stringify({
@@ -239,18 +345,21 @@ async function generateResultsExplanation(query, analysis, restaurants) {
               evidence
             })
           }
-        ]
-      });
-      console.log('OpenAI API call successful');
-    } catch (openaiErr) {
-      console.error('OpenAI API call failed:', openaiErr.message);
-      console.error('OpenAI error details:', openaiErr.response?.data || openaiErr);
+        ],
+        systemPrompt,
+        'json_object'
+      );
+      
+      console.log(`${AI_PROVIDER.toUpperCase()} API call successful`);
+    } catch (aiErr) {
+      console.error(`${AI_PROVIDER.toUpperCase()} API call failed:`, aiErr.message);
+      console.error('AI error details:', aiErr.response?.data || aiErr);
       return buildFallbackExplanation(query, analysis, restaurants);
     }
 
-    const raw = completion?.choices?.[0]?.message?.content;
+    const raw = aiResponse?.content;
     if (!raw) {
-      console.warn('OpenAI returned empty content, using fallback');
+      console.warn(`${AI_PROVIDER.toUpperCase()} returned empty content, using fallback`);
       return buildFallbackExplanation(query, analysis, restaurants);
     }
 
@@ -258,13 +367,13 @@ async function generateResultsExplanation(query, analysis, restaurants) {
     try {
       parsed = JSON.parse(raw);
     } catch (parseErr) {
-      console.error('Failed to parse OpenAI response:', parseErr.message);
+      console.error(`Failed to parse ${AI_PROVIDER.toUpperCase()} response:`, parseErr.message);
       console.error('Raw response:', raw.substring(0, 200));
       return buildFallbackExplanation(query, analysis, restaurants);
     }
 
     if (!parsed || typeof parsed !== 'object') {
-      console.warn('OpenAI returned invalid format, using fallback');
+      console.warn(`${AI_PROVIDER.toUpperCase()} returned invalid format, using fallback`);
       return buildFallbackExplanation(query, analysis, restaurants);
     }
 
@@ -295,45 +404,46 @@ async function generateResultsExplanation(query, analysis, restaurants) {
   }
 }
 
-// 使用 OpenAI 分析用戶的自然語言搜索
+// 使用 AI 分析用戶的自然語言搜索
 async function analyzeSearchQuery(query) {
   try {
-    if (!process.env.OPENAI_API_KEY) {
-      console.warn('OPENAI_API_KEY is not set, using fallback analysis');
-      throw new Error('OpenAI API key not configured');
+    // 检查是否有可用的 AI API key
+    const hasOpenAI = AI_PROVIDER === 'openai' && process.env.OPENAI_API_KEY;
+    const hasGemini = AI_PROVIDER === 'gemini' && process.env.GEMINI_API_KEY;
+    
+    if (!hasOpenAI && !hasGemini) {
+      console.warn(`${AI_PROVIDER.toUpperCase()} API key is not set, using fallback analysis`);
+      throw new Error(`${AI_PROVIDER.toUpperCase()} API key not configured`);
     }
 
-    const completion = await openai.chat.completions.create({
-      model: getOpenAIModel(),
-      messages: [
-        {
-          role: "system",
-          content:
-            "你是一個餐廳搜索助手，請『理解用戶意圖』而不是只抽關鍵字。請以 JSON 回傳以下欄位（沒有就給 null 或 []）：\n" +
-            "- cuisine: 菜系（例：日式/火鍋/韓式）\n" +
-            "- atmosphere: 氛圍/場合（例：約會/家庭/朋友聚會/商務）\n" +
-            "- priceRange: 價格偏好（例：平價/中價位/高檔）\n" +
-            "- preferredDishes: 使用者明確想吃的菜式（array，例如：麻辣鍋、壽司、牛排）\n" +
-            "- ingredients: 使用者提到的食材/配料偏好（array，例如：牛肉、海鮮、蔬菜、芝士）\n" +
-            "- dietary: 飲食限制/需求（array，例如：素食、清真、無麩質、低卡、無辣）\n" +
-            "- style: 風格偏好（array，例如：精緻、傳統、現代、打卡、安靜）\n" +
-            "- occasion: 用餐情境（例：生日/紀念日/工作餐）\n" +
-            "- constraints: 其他條件（array，例如：要開到很晚、可訂位、可帶小孩）\n" +
-            "只輸出 JSON 物件。"
-        },
+    const systemPrompt = "你是一個餐廳搜索助手，請『理解用戶意圖』而不是只抽關鍵字。請以 JSON 回傳以下欄位（沒有就給 null 或 []）：\n" +
+      "- cuisine: 菜系（例：日式/火鍋/韓式）\n" +
+      "- atmosphere: 氛圍/場合（例：約會/家庭/朋友聚會/商務）\n" +
+      "- priceRange: 價格偏好（例：平價/中價位/高檔）\n" +
+      "- preferredDishes: 使用者明確想吃的菜式（array，例如：麻辣鍋、壽司、牛排）\n" +
+      "- ingredients: 使用者提到的食材/配料偏好（array，例如：牛肉、海鮮、蔬菜、芝士）\n" +
+      "- dietary: 飲食限制/需求（array，例如：素食、清真、無麩質、低卡、無辣）\n" +
+      "- style: 風格偏好（array，例如：精緻、傳統、現代、打卡、安靜）\n" +
+      "- occasion: 用餐情境（例：生日/紀念日/工作餐）\n" +
+      "- constraints: 其他條件（array，例如：要開到很晚、可訂位、可帶小孩）\n" +
+      "只輸出 JSON 物件。";
+
+    const aiResponse = await callAI(
+      [
         {
           role: "user",
           content: query
         }
       ],
-      response_format: { type: "json_object" }
-    });
+      systemPrompt,
+      'json_object'
+    );
 
-    if (!completion.choices || !completion.choices[0] || !completion.choices[0].message) {
-      throw new Error('Invalid OpenAI response format');
+    if (!aiResponse || !aiResponse.content) {
+      throw new Error(`Invalid ${AI_PROVIDER.toUpperCase()} response format`);
     }
 
-    const analysis = JSON.parse(completion.choices[0].message.content);
+    const analysis = JSON.parse(aiResponse.content);
     // 正規化：確保 array 欄位是 array
     return {
       cuisine: analysis.cuisine ?? null,
@@ -347,8 +457,8 @@ async function analyzeSearchQuery(query) {
       constraints: asArrayOfStrings(analysis.constraints)
     };
   } catch (error) {
-    console.error('OpenAI API error:', error.message);
-    console.error('OpenAI error details:', error.response?.data || error);
+    console.error(`${AI_PROVIDER.toUpperCase()} API error:`, error.message);
+    console.error('AI error details:', error.response?.data || error);
     // 如果 API 失敗，返回基本分析
     return {
       cuisine: extractCuisine(query),
