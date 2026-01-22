@@ -13,6 +13,16 @@ function getOpenAIModel() {
   return process.env.OPENAI_MODEL || 'gpt-4o-mini';
 }
 
+function simpleHash(str) {
+  const s = String(str || '');
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
 function asArrayOfStrings(value) {
   if (!value) return [];
   if (Array.isArray(value)) return value.filter(Boolean).map(String);
@@ -48,6 +58,7 @@ function buildFallbackExplanation(query, analysis, restaurants) {
   const tags = [cuisine && `菜系：${cuisine}`, atmosphere && `氛圍：${atmosphere}`].filter(Boolean);
 
   const items = restaurants.slice(0, 20).map((r) => {
+    const seed = simpleHash(r.placeId || r.name || '');
     const bits = [];
     if (cuisine) bits.push(`符合你要的「${cuisine}」方向`);
     if (atmosphere) bits.push(`更偏「${atmosphere}」取向（以類型/熱度推斷）`);
@@ -57,7 +68,14 @@ function buildFallbackExplanation(query, analysis, restaurants) {
     if (dietary.length) bits.push(`飲食需求：${dietary.slice(0, 3).join('、')}`);
     if (r.rating && r.rating >= 4.2) bits.push(`評分較高（${Number(r.rating).toFixed(1)}）`);
     if (r.userRatingsTotal && r.userRatingsTotal >= 200) bits.push(`評價數較多（${r.userRatingsTotal}）`);
-    const reason = bits.length ? bits.join('；') : '與你的搜尋需求相近，且附近熱度較高';
+    const openNowHint = r.openingHours?.openNow === true ? '而且目前顯示為營業中' : null;
+    const templates = [
+      () => `這家我優先放進來，因為${bits[0] || '類型與你的搜尋接近'}${openNowHint ? `，${openNowHint}` : ''}。`,
+      () => `如果你想找「${query}」，這家在類型/熱度上比較貼近${openNowHint ? `，${openNowHint}` : ''}。`,
+      () => `這家符合你的方向：${pickTop(bits, 2).join('；')}${openNowHint ? `；${openNowHint}` : ''}。`,
+      () => `把它列進推薦的原因是：${pickTop(bits, 2).join('；')}。`
+    ];
+    const reason = templates[seed % templates.length]();
 
     return {
       placeId: r.placeId,
@@ -67,7 +85,9 @@ function buildFallbackExplanation(query, analysis, restaurants) {
         preferredDishes.length ? `你想吃：${preferredDishes.slice(0, 2).join('、')}` : null,
         ingredients.length ? `配料偏好：${ingredients.slice(0, 2).join('、')}` : null,
         r.rating ? `評分：${Number(r.rating).toFixed(1)}` : null,
-        r.priceLevel ? `價位：${'$'.repeat(r.priceLevel)}` : null
+        r.userRatingsTotal ? `評價：${r.userRatingsTotal}` : null,
+        r.priceLevel ? `價位：${'$'.repeat(r.priceLevel)}` : null,
+        r.openingHours?.openNow === true ? '目前顯示營業中' : null
       ].filter(Boolean),
       // 注意：Google Places 不提供完整菜單；這裡僅給「可能適合嘗試」的方向
       suggestedDishes: preferredDishes.length ? preferredDishes.slice(0, 4) : cuisineToSuggestedDishes(cuisine),
@@ -142,8 +162,10 @@ async function generateResultsExplanation(query, analysis, restaurants) {
             '如果 evidence 提供了「評論片段」或「官網菜單/段落」，你可以引用它們來做更有依據的推論；' +
             '若沒有證據，請保持保守並標註為推測。' +
             '你可以給「可能適合嘗試」的菜式/配料/風格方向，但必須明確用推測語氣（例如：可能、或許、通常、建議先確認菜單）。' +
+            '【重要】避免模板化：每家餐廳的 reason 句式要有差異，不要全部只寫「評分高/評價多」。' +
+            '每家至少涵蓋 2 個角度（從：用戶意圖匹配、可能菜式/配料、風格/氛圍、評論證據、官網菜單證據、價位、是否營業中、類型匹配、熱度）。' +
             '輸出 JSON：{summary: string, items: [{placeId: string, reason: string, highlights: string[], suggestedDishes: string[], suggestedIngredients: string[], suggestedStyle: string[], confidence: \"low\"|\"medium\"|\"high\", evidenceNotes: string[]}], disclaimer: string}。' +
-            '每家 reason 1-2 句話，highlights 2-4 點，文字用繁體中文。'
+            '每家 reason 1-2 句話，highlights 3-5 點（要多樣化），文字用繁體中文。'
         },
         {
           role: 'user',

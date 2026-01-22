@@ -57,6 +57,14 @@ function RestaurantCard({ restaurant, userId, onRemove }) {
           </p>
         )}
 
+        {(Array.isArray(restaurant.aiHighlights) && restaurant.aiHighlights.length > 0) && (
+          <ul className="card-ai-highlights">
+            {restaurant.aiHighlights.slice(0, 3).map((h) => (
+              <li key={h}>{h}</li>
+            ))}
+          </ul>
+        )}
+
         {(Array.isArray(restaurant.aiEvidenceNotes) && restaurant.aiEvidenceNotes.length > 0) && (
           <p className="card-ai-evidence">
             依據：{restaurant.aiEvidenceNotes.slice(0, 2).join('；')}
