@@ -8,6 +8,108 @@ const openai = new OpenAI({
 
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 
+function cuisineToSuggestedDishes(cuisine) {
+  const map = {
+    '日式': ['壽司/刺身', '拉麵', '天婦羅', '燒鳥'],
+    '中式': ['小菜/前菜', '招牌熱炒', '湯品', '點心'],
+    '火鍋': ['招牌湯底', '手切牛/羊', '海鮮拼盤', '自製丸類/餃類'],
+    '西式': ['牛排', '意大利麵', '沙拉', '甜品'],
+    '韓式': ['烤肉拼盤', '泡菜鍋', '拌飯', '炸雞'],
+    '泰式': ['冬陰功', '青咖喱', '炒河粉', '芒果糯米飯']
+  };
+  return map[cuisine] || ['招牌菜', '熱門主食', '特色小食', '甜品/飲品'];
+}
+
+function buildFallbackExplanation(query, analysis, restaurants) {
+  const cuisine = analysis?.cuisine || null;
+  const atmosphere = analysis?.atmosphere || null;
+  const tags = [cuisine && `菜系：${cuisine}`, atmosphere && `氛圍：${atmosphere}`].filter(Boolean);
+
+  const items = restaurants.slice(0, 20).map((r) => {
+    const bits = [];
+    if (cuisine) bits.push(`符合你要的「${cuisine}」方向`);
+    if (atmosphere) bits.push(`更偏「${atmosphere}」取向（以類型/熱度推斷）`);
+    if (r.rating && r.rating >= 4.2) bits.push(`評分較高（${Number(r.rating).toFixed(1)}）`);
+    if (r.userRatingsTotal && r.userRatingsTotal >= 200) bits.push(`評價數較多（${r.userRatingsTotal}）`);
+    const reason = bits.length ? bits.join('；') : '與你的搜尋需求相近，且附近熱度較高';
+
+    return {
+      placeId: r.placeId,
+      reason,
+      highlights: [
+        cuisine ? `偏向 ${cuisine} 類型` : '餐廳類型匹配',
+        r.rating ? `評分：${Number(r.rating).toFixed(1)}` : null,
+        r.priceLevel ? `價位：${'$'.repeat(r.priceLevel)}` : null
+      ].filter(Boolean),
+      // 注意：Google Places 不提供完整菜單；這裡僅給「可能適合嘗試」的方向
+      suggestedDishes: cuisineToSuggestedDishes(cuisine)
+    };
+  });
+
+  return {
+    summary: `我根據你的需求「${query}」${tags.length ? `（${tags.join('，')}）` : ''}，優先挑選附近餐廳中類型匹配、評分/熱度較高的選項，並為每家整理一個推薦理由。`,
+    items,
+    disclaimer: '提示：Google Places 不提供完整菜單；「可能適合嘗試」僅是依菜系常見菜式給的方向，實際以店家菜單為準。'
+  };
+}
+
+async function generateResultsExplanation(query, analysis, restaurants) {
+  try {
+    if (!process.env.OPENAI_API_KEY) return buildFallbackExplanation(query, analysis, restaurants);
+
+    const compactRestaurants = restaurants.slice(0, 12).map(r => ({
+      placeId: r.placeId,
+      name: r.name,
+      address: r.address,
+      rating: r.rating,
+      userRatingsTotal: r.userRatingsTotal,
+      priceLevel: r.priceLevel,
+      types: r.types
+    }));
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'system',
+          content:
+            '你是餐廳推薦解說助手。你只能根據輸入的餐廳資料（名稱/地址/評分/類型等）與使用者查詢來解釋，不要捏造店家特色、菜單、折扣、裝潢、服務等未提供資訊。' +
+            '你可以提供「可能適合嘗試」的菜品方向，但必須明確標註為推測、以菜單為準。' +
+            '輸出 JSON：{summary: string, items: [{placeId: string, reason: string, highlights: string[], suggestedDishes: string[]}], disclaimer: string}。' +
+            '每家 reason 1 句話，highlights 2-3 點，文字用繁體中文。'
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            query,
+            analysis,
+            restaurants: compactRestaurants
+          })
+        }
+      ]
+    });
+
+    const raw = completion?.choices?.[0]?.message?.content;
+    if (!raw) return buildFallbackExplanation(query, analysis, restaurants);
+
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return buildFallbackExplanation(query, analysis, restaurants);
+
+    // 兜底：確保字段存在
+    return {
+      summary: parsed.summary || buildFallbackExplanation(query, analysis, restaurants).summary,
+      items: Array.isArray(parsed.items) ? parsed.items : buildFallbackExplanation(query, analysis, restaurants).items,
+      disclaimer:
+        parsed.disclaimer ||
+        '提示：Google Places 不提供完整菜單；「可能適合嘗試」僅是推測方向，實際以店家菜單為準。'
+    };
+  } catch (e) {
+    console.error('AI explanation error:', e.message);
+    return buildFallbackExplanation(query, analysis, restaurants);
+  }
+}
+
 // 使用 OpenAI 分析用戶的自然語言搜索
 async function analyzeSearchQuery(query) {
   try {
@@ -46,80 +148,6 @@ async function analyzeSearchQuery(query) {
       atmosphere: extractAtmosphere(query),
       priceRange: null
     };
-  }
-}
-
-// 使用 AI 分析搜索結果並生成講解
-async function analyzeSearchResults(query, analysis, restaurants) {
-  try {
-    if (!process.env.OPENAI_API_KEY) {
-      console.warn('OPENAI_API_KEY is not set, skipping result analysis');
-      return null;
-    }
-
-    // 構建餐廳摘要信息（限制數量以節省 token）
-    const restaurantSummaries = restaurants.slice(0, 10).map((restaurant, index) => ({
-      index: index + 1,
-      name: restaurant.name,
-      rating: restaurant.rating,
-      priceLevel: restaurant.priceLevel,
-      types: restaurant.types?.slice(0, 3) || [],
-      address: restaurant.address
-    }));
-
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        {
-          role: "system",
-          content: "你是一個專業的餐廳推薦助手。根據用戶的搜索查詢和搜索結果，生成一份友好的講解，解釋為什麼選擇這些餐廳，每家餐廳的特色，以及哪些菜品或特點符合用戶的搜索要求。使用繁體中文回答，語氣要親切自然。"
-        },
-        {
-          role: "user",
-          content: `用戶搜索：「${query}」
-
-搜索分析：
-- 菜系類型：${analysis.cuisine || '未指定'}
-- 氛圍要求：${analysis.atmosphere || '未指定'}
-- 價格範圍：${analysis.priceRange || '未指定'}
-
-找到的餐廳（共 ${restaurants.length} 家）：
-${JSON.stringify(restaurantSummaries, null, 2)}
-
-請生成一份講解，包括：
-1. 為什麼選擇這幾家餐廳（簡要說明匹配原因）
-2. 每家餐廳的特色（簡要描述，重點突出符合搜索要求的部分）
-3. 推薦理由（為什麼這些餐廳適合用戶的需求）
-
-請以 JSON 格式返回，格式如下：
-{
-  "summary": "整體推薦理由（2-3句話）",
-  "restaurants": [
-    {
-      "index": 1,
-      "name": "餐廳名稱",
-      "highlights": "這家餐廳的特色和符合搜索要求的原因（2-3句話）",
-      "recommendedDishes": "推薦的菜品或特色（如果有的話）"
-    }
-  ]
-}`
-        }
-      ],
-      response_format: { type: "json_object" },
-      temperature: 0.7
-    });
-
-    if (!completion.choices || !completion.choices[0] || !completion.choices[0].message) {
-      throw new Error('Invalid OpenAI response format');
-    }
-
-    const resultAnalysis = JSON.parse(completion.choices[0].message.content);
-    console.log('Search results analysis generated');
-    return resultAnalysis;
-  } catch (error) {
-    console.error('Search results analysis error:', error.message);
-    // 分析失敗不影響搜索結果，返回 null
-    return null;
   }
 }
 
@@ -473,22 +501,33 @@ exports.searchRestaurants = async (req, res) => {
       });
     }
 
-    // 3. 使用 AI 分析搜索結果並生成講解
-    let resultAnalysis = null;
-    try {
-      resultAnalysis = await analyzeSearchResults(query, analysis, validRestaurants);
-      console.log('Result analysis generated:', resultAnalysis ? 'Yes' : 'No');
-    } catch (error) {
-      console.error('Result analysis error (non-blocking):', error.message);
-      // AI 分析失敗不影響搜索結果
+    // 4. AI 講解（可透過 explain=false 關閉）
+    const shouldExplain = req.body.explain !== false;
+    let explanation = null;
+    let restaurantsWithReasons = validRestaurants;
+
+    if (shouldExplain) {
+      explanation = await generateResultsExplanation(query, analysis, validRestaurants);
+      const reasonMap = new Map(
+        (explanation.items || []).map((it) => [it.placeId, it])
+      );
+      restaurantsWithReasons = validRestaurants.map((r) => {
+        const it = reasonMap.get(r.placeId);
+        return {
+          ...r,
+          aiReason: it?.reason || null,
+          aiHighlights: it?.highlights || null,
+          aiSuggestedDishes: it?.suggestedDishes || null
+        };
+      });
     }
 
     res.json({
       success: true,
-      count: validRestaurants.length,
-      restaurants: validRestaurants,
+      count: restaurantsWithReasons.length,
+      restaurants: restaurantsWithReasons,
       analysis: analysis,
-      resultAnalysis: resultAnalysis // AI 生成的結果講解
+      explanation
     });
 
   } catch (error) {
