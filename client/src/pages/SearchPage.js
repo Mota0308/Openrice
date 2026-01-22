@@ -59,20 +59,34 @@ function SearchPage({ userId }) {
     setSearchAnalysis(null);
 
     try {
+      console.log('Sending search request:', { query, location });
       const response = await api.post('/api/search', {
         query,
         location
       });
 
+      console.log('Search response:', response.data);
+
       if (response.data.success) {
-        setRestaurants(response.data.restaurants);
+        setRestaurants(response.data.restaurants || []);
         setSearchAnalysis(response.data.analysis);
+        
+        if (!response.data.restaurants || response.data.restaurants.length === 0) {
+          setError('未找到符合條件的餐廳，請嘗試其他搜索關鍵詞');
+        }
       } else {
-        setError('搜索失敗，請稍後再試');
+        setError(response.data.error || '搜索失敗，請稍後再試');
       }
     } catch (err) {
       console.error('Search error:', err);
-      setError(err.response?.data?.error || '搜索失敗，請稍後再試');
+      console.error('Error details:', {
+        message: err.message,
+        response: err.response?.data,
+        status: err.response?.status
+      });
+      
+      const errorMessage = err.response?.data?.error || err.message || '搜索失敗，請稍後再試';
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -129,7 +143,16 @@ function SearchPage({ userId }) {
           <RestaurantList restaurants={restaurants} userId={userId} />
         )}
 
-        {!loading && restaurants.length === 0 && !error && location && (
+        {!loading && restaurants.length === 0 && !error && location && searchAnalysis && (
+          <div className="empty-state">
+            <p>未找到符合條件的餐廳</p>
+            <p style={{ fontSize: '0.9rem', color: '#999', marginTop: '0.5rem' }}>
+              請嘗試其他搜索關鍵詞或擴大搜索範圍
+            </p>
+          </div>
+        )}
+
+        {!loading && restaurants.length === 0 && !error && !searchAnalysis && location && (
           <div className="empty-state">
             <p>輸入搜索內容開始尋找餐廳</p>
           </div>

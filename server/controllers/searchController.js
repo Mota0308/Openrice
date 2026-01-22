@@ -142,12 +142,52 @@ exports.searchRestaurants = async (req, res) => {
       return res.status(400).json({ error: '需要提供位置信息' });
     }
 
+    // 檢查 API 密鑰
+    if (!GOOGLE_MAPS_API_KEY) {
+      console.error('GOOGLE_MAPS_API_KEY is not set');
+      return res.status(500).json({ 
+        error: 'Google Maps API 密鑰未配置，請聯繫管理員',
+        success: false
+      });
+    }
+
     // 1. 使用 AI 分析搜索查詢
-    const analysis = await analyzeSearchQuery(query);
-    console.log('Search analysis:', analysis);
+    let analysis;
+    try {
+      analysis = await analyzeSearchQuery(query);
+      console.log('Search analysis:', analysis);
+    } catch (error) {
+      console.error('Analysis error, using fallback:', error);
+      // 使用備用分析
+      analysis = {
+        cuisine: extractCuisine(query),
+        atmosphere: extractAtmosphere(query),
+        priceRange: null
+      };
+    }
 
     // 2. 使用 Google Places API 搜索
-    const places = await searchGooglePlaces(location, query, analysis);
+    let places;
+    try {
+      places = await searchGooglePlaces(location, query, analysis);
+      console.log('Google Places results:', places.length, 'places found');
+    } catch (error) {
+      console.error('Google Places search error:', error);
+      return res.status(500).json({ 
+        error: `搜索失敗: ${error.message}`,
+        success: false
+      });
+    }
+
+    if (!places || places.length === 0) {
+      return res.json({
+        success: true,
+        count: 0,
+        restaurants: [],
+        analysis: analysis,
+        message: '未找到符合條件的餐廳'
+      });
+    }
 
     // 3. 獲取詳細信息並格式化結果
     const restaurants = await Promise.all(
@@ -200,6 +240,17 @@ exports.searchRestaurants = async (req, res) => {
 
     // 過濾掉 null 值
     const validRestaurants = restaurants.filter(r => r !== null);
+    console.log('Valid restaurants:', validRestaurants.length);
+
+    if (validRestaurants.length === 0) {
+      return res.json({
+        success: true,
+        count: 0,
+        restaurants: [],
+        analysis: analysis,
+        message: '未找到符合條件的餐廳，請嘗試其他搜索關鍵詞'
+      });
+    }
 
     res.json({
       success: true,
