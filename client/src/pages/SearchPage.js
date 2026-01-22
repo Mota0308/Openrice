@@ -13,6 +13,7 @@ function SearchPage({ userId }) {
   const [searchAnalysis, setSearchAnalysis] = useState(null);
   const [explanation, setExplanation] = useState(null);
   const [locationInfo, setLocationInfo] = useState(null);
+  const [slowHint, setSlowHint] = useState(null);
 
   // 獲取用戶位置
   useEffect(() => {
@@ -56,17 +57,24 @@ function SearchPage({ userId }) {
 
     setLoading(true);
     setError(null);
+    setSlowHint(null);
     setRestaurants([]);
     setSearchAnalysis(null);
     setExplanation(null);
 
     try {
       console.log('Sending search request:', { query, location });
+      // If Ollama is cold-starting, the first request can be slow.
+      const slowTimer = setTimeout(() => {
+        setSlowHint('AI 正在載入模型與整理證據，第一次可能需要 1–2 分鐘，請稍候…');
+      }, 8000);
+
       const response = await api.post('/api/search', {
         query,
         location,
         explain: true
       });
+      clearTimeout(slowTimer);
 
       console.log('Search response:', response.data);
 
@@ -89,7 +97,10 @@ function SearchPage({ userId }) {
         status: err.response?.status
       });
       
-      const errorMessage = err.response?.data?.error || err.message || '搜索失敗，請稍後再試';
+      const isTimeout = err?.code === 'ECONNABORTED' || /timeout/i.test(String(err?.message || ''));
+      const errorMessage = isTimeout
+        ? '搜尋超時：AI 服務可能正在啟動/下載模型。請稍後再試（或再按一次搜尋）。'
+        : (err.response?.data?.error || err.message || '搜索失敗，請稍後再試');
       setError(errorMessage);
     } finally {
       setLoading(false);
@@ -116,6 +127,10 @@ function SearchPage({ userId }) {
 
         {error && (
           <div className="error-message">{error}</div>
+        )}
+        
+        {slowHint && !error && (
+          <div className="location-status">{slowHint}</div>
         )}
 
         {searchAnalysis && (
