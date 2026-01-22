@@ -24,6 +24,24 @@ function normalizeOllamaBaseUrl(raw) {
   return `http://${noTrailing}`;
 }
 
+async function getOllamaInstalledModels(ollamaBaseUrl) {
+  const resp = await axios.get(`${ollamaBaseUrl}/api/tags`, { timeout: 15000 });
+  const models = Array.isArray(resp?.data?.models) ? resp.data.models : [];
+  return models
+    .map((m) => String(m?.name || '').trim())
+    .filter(Boolean);
+}
+
+function isOllamaModelNotFoundError(err) {
+  const status = err?.response?.status;
+  const msg =
+    err?.response?.data?.error ||
+    err?.response?.data?.message ||
+    err?.message ||
+    '';
+  return status === 404 && /model\s+'.+'\s+not\s+found/i.test(String(msg));
+}
+
 // OpenAI 初始化（如果使用）
 const openai = AI_PROVIDER === 'openai' ? new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
@@ -73,10 +91,11 @@ async function callAI(messages, systemPrompt, responseFormat = 'json_object') {
     }
     
     try {
-      console.log(`Calling Ollama API at ${ollamaBaseUrl} with model ${OLLAMA_MODEL}`);
-      
+      const preferredModel = OLLAMA_MODEL;
+      console.log(`Calling Ollama API at ${ollamaBaseUrl} with model ${preferredModel}`);
+
       const response = await axios.post(`${ollamaBaseUrl}/api/generate`, {
-        model: OLLAMA_MODEL,
+        model: preferredModel,
         prompt: fullPrompt,
         stream: false,
         options: {
@@ -107,6 +126,46 @@ async function callAI(messages, systemPrompt, responseFormat = 'json_object') {
         provider: 'ollama'
       };
     } catch (error) {
+      // If the configured model isn't installed on the Ollama service, try one installed model once.
+      if (isOllamaModelNotFoundError(error)) {
+        try {
+          const installed = await getOllamaInstalledModels(ollamaBaseUrl);
+          const fallbackPref = String(process.env.OLLAMA_FALLBACK_MODEL || '').trim();
+          const fallbackModel =
+            (fallbackPref && installed.includes(fallbackPref) && fallbackPref) ||
+            installed[0] ||
+            null;
+
+          if (fallbackModel && fallbackModel !== OLLAMA_MODEL) {
+            console.warn(`Ollama model "${OLLAMA_MODEL}" not found. Retrying with installed model "${fallbackModel}". Installed: ${installed.slice(0, 5).join(', ')}${installed.length > 5 ? '...' : ''}`);
+            const response2 = await axios.post(`${ollamaBaseUrl}/api/generate`, {
+              model: fallbackModel,
+              prompt: fullPrompt,
+              stream: false,
+              options: {
+                temperature: 0.85,
+                top_p: 0.95,
+                num_predict: 2000,
+              }
+            }, {
+              timeout: 60000
+            });
+
+            let content2 = response2.data.response;
+            if (!content2) throw new Error('Ollama returned empty response');
+            let cleanedText2 = String(content2).trim();
+            if (cleanedText2.startsWith('```json')) {
+              cleanedText2 = cleanedText2.replace(/^```json\s*/s, '').replace(/\s*```$/s, '');
+            } else if (cleanedText2.startsWith('```')) {
+              cleanedText2 = cleanedText2.replace(/^```\s*/s, '').replace(/\s*```$/s, '');
+            }
+
+            return { content: cleanedText2, provider: 'ollama' };
+          }
+        } catch (fallbackErr) {
+          console.warn('Ollama fallback model retry failed:', fallbackErr?.message || fallbackErr);
+        }
+      }
       console.error('Ollama API error:', error.message);
       if (error.response) {
         console.error('Ollama API response:', error.response.data);
