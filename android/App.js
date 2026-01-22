@@ -12,7 +12,6 @@ const Stack = createNativeStackNavigator();
 const getUserId = () => {
   // 在實際應用中，應該從安全存儲獲取
   // 這裡使用簡單的本地存儲模擬
-  const AsyncStorage = require('@react-native-async-storage/async-storage').default;
   // 簡化版本，實際應該使用 AsyncStorage
   return 'user_' + Date.now();
 };

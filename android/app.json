@@ -3,6 +3,7 @@
     "name": "OpenRice",
     "slug": "openrice",
     "version": "1.0.0",
+    "sdkVersion": "54.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -30,7 +31,7 @@
       ],
       "config": {
         "googleMaps": {
-          "apiKey": "YOUR_GOOGLE_MAPS_API_KEY"
+          "apiKey":"AIzaSyCsDlH7B6Qi_qL9bWkrqrvymMALHIFHqFY"
         }
       }
     },
