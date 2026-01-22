@@ -11,6 +11,7 @@ function SearchPage({ userId }) {
   const [error, setError] = useState(null);
   const [location, setLocation] = useState(null);
   const [searchAnalysis, setSearchAnalysis] = useState(null);
+  const [locationInfo, setLocationInfo] = useState(null);
 
   // 獲取用戶位置
   useEffect(() => {
@@ -21,16 +22,23 @@ function SearchPage({ userId }) {
             lat: position.coords.latitude,
             lng: position.coords.longitude
           });
+          setLocationInfo('使用您的位置');
         },
         (err) => {
-          console.error('Geolocation error:', err);
+          // 不顯示控制台錯誤，使用默認位置
           // 默認位置（台北）
           setLocation({ lat: 25.0330, lng: 121.5654 });
+          setLocationInfo('使用默認位置（台北）');
+        },
+        {
+          timeout: 10000, // 10秒超時
+          enableHighAccuracy: false // 不需要高精度，加快獲取速度
         }
       );
     } else {
       // 默認位置（台北）
       setLocation({ lat: 25.0330, lng: 121.5654 });
+      setLocationInfo('使用默認位置（台北）');
     }
   }, []);
 
@@ -80,6 +88,12 @@ function SearchPage({ userId }) {
         
         {!location && (
           <div className="location-status">正在獲取您的位置...</div>
+        )}
+
+        {location && locationInfo && (
+          <div className="location-info">
+            <span>📍 {locationInfo}</span>
+          </div>
         )}
 
         {error && (
