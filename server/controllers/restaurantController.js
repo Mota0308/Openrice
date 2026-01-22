@@ -4,6 +4,27 @@ const axios = require('axios');
 
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 
+function normalizePriceLevel(priceLevel) {
+  if (priceLevel === null || priceLevel === undefined) return null;
+  if (typeof priceLevel === 'number') {
+    if (Number.isFinite(priceLevel) && priceLevel >= 0 && priceLevel <= 4) return priceLevel;
+    return null;
+  }
+  const s = String(priceLevel).trim().toUpperCase();
+  const map = {
+    PRICE_LEVEL_UNSPECIFIED: null,
+    PRICE_LEVEL_FREE: 0,
+    PRICE_LEVEL_INEXPENSIVE: 1,
+    PRICE_LEVEL_MODERATE: 2,
+    PRICE_LEVEL_EXPENSIVE: 3,
+    PRICE_LEVEL_VERY_EXPENSIVE: 4
+  };
+  if (Object.prototype.hasOwnProperty.call(map, s)) return map[s];
+  const n = Number(s);
+  if (Number.isFinite(n) && n >= 0 && n <= 4) return n;
+  return null;
+}
+
 // 從 Google Places API 獲取餐廳詳情
 async function fetchPlaceDetailsFromAPI(placeId) {
   try {
@@ -59,7 +80,7 @@ async function fetchPlaceDetailsFromAPI(placeId) {
         },
         rating: place.rating || 0,
         userRatingsTotal: place.userRatingCount || 0,
-        priceLevel: place.priceLevel || null,
+        priceLevel: normalizePriceLevel(place.priceLevel),
         types: place.types || [],
         phoneNumber: place.nationalPhoneNumber || null,
         website: place.websiteUri || null,

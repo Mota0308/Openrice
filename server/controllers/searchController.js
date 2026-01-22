@@ -13,6 +13,28 @@ function getOpenAIModel() {
   return process.env.OPENAI_MODEL || 'gpt-4o-mini';
 }
 
+function normalizePriceLevel(priceLevel) {
+  if (priceLevel === null || priceLevel === undefined) return null;
+  if (typeof priceLevel === 'number') {
+    if (Number.isFinite(priceLevel) && priceLevel >= 0 && priceLevel <= 4) return priceLevel;
+    return null;
+  }
+  const s = String(priceLevel).trim().toUpperCase();
+  const map = {
+    PRICE_LEVEL_UNSPECIFIED: null,
+    PRICE_LEVEL_FREE: 0,
+    PRICE_LEVEL_INEXPENSIVE: 1,
+    PRICE_LEVEL_MODERATE: 2,
+    PRICE_LEVEL_EXPENSIVE: 3,
+    PRICE_LEVEL_VERY_EXPENSIVE: 4
+  };
+  if (Object.prototype.hasOwnProperty.call(map, s)) return map[s];
+  // Sometimes old style string numbers
+  const n = Number(s);
+  if (Number.isFinite(n) && n >= 0 && n <= 4) return n;
+  return null;
+}
+
 function simpleHash(str) {
   const s = String(str || '');
   let h = 2166136261;
@@ -90,7 +112,7 @@ function buildFallbackExplanation(query, analysis, restaurants) {
         ingredients.length ? `配料偏好：${ingredients.slice(0, 2).join('、')}` : null,
         r.rating ? `評分：${Number(r.rating).toFixed(1)}` : null,
         r.userRatingsTotal ? `評價：${r.userRatingsTotal}` : null,
-        r.priceLevel ? `價位：${'$'.repeat(r.priceLevel)}` : null,
+        normalizePriceLevel(r.priceLevel) !== null ? `價位：${'$'.repeat(normalizePriceLevel(r.priceLevel))}` : null,
         r.openingHours?.openNow === true ? '目前顯示營業中' : null
       ].filter(Boolean),
       // 注意：Google Places 不提供完整菜單；這裡僅給「可能適合嘗試」的方向
@@ -446,7 +468,7 @@ async function searchGooglePlaces(location, query, analysis) {
         },
         rating: place.rating || 0,
         user_ratings_total: place.userRatingCount || 0,
-        price_level: place.priceLevel || null,
+        price_level: normalizePriceLevel(place.priceLevel),
         types: place.types || [],
         photos: place.photos || [],
         formatted_phone_number: place.nationalPhoneNumber || null,
@@ -623,7 +645,7 @@ exports.searchRestaurants = async (req, res) => {
             },
             rating: place.rating || 0,
             userRatingsTotal: place.user_ratings_total || 0,
-            priceLevel: place.price_level || null,
+            priceLevel: normalizePriceLevel(place.price_level),
             types: place.types || [],
             phoneNumber: place.formatted_phone_number || null,
             website: place.website || null,
