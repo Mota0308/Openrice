@@ -465,20 +465,43 @@ async function fetchPlacesEvidence(placeId, googleApiKey) {
 }
 
 async function fetchEvidenceForPlaces(placeIds, googleApiKey) {
-  const maxPlaces = Number(process.env.EVIDENCE_MAX_PLACES || 3);
-  const ids = pickTop(placeIds, maxPlaces).map(normalizePlaceId);
+  try {
+    const maxPlaces = Number(process.env.EVIDENCE_MAX_PLACES || 3);
+    const ids = pickTop(placeIds, maxPlaces).map(normalizePlaceId);
 
-  const out = new Map();
-  // small concurrency (avoid hammering websites/APIs)
-  for (const pid of ids) {
-    const placeEv = await fetchPlacesEvidence(pid, googleApiKey);
-    const webEv = placeEv?.websiteUri ? await fetchWebsiteEvidence(placeEv.websiteUri) : null;
-    out.set(pid, {
-      place: placeEv,
-      website: webEv
-    });
+    const out = new Map();
+    // small concurrency (avoid hammering websites/APIs)
+    for (const pid of ids) {
+      try {
+        const placeEv = await fetchPlacesEvidence(pid, googleApiKey);
+        let webEv = null;
+        if (placeEv?.websiteUri) {
+          try {
+            webEv = await fetchWebsiteEvidence(placeEv.websiteUri);
+          } catch (webErr) {
+            console.warn(`Website evidence fetch failed for ${pid}:`, webErr.message);
+            // Continue without website evidence
+          }
+        }
+        out.set(pid, {
+          place: placeEv,
+          website: webEv
+        });
+      } catch (placeErr) {
+        console.warn(`Places evidence fetch failed for ${pid}:`, placeErr.message);
+        // Continue without evidence for this place
+        out.set(pid, {
+          place: null,
+          website: null
+        });
+      }
+    }
+    return out;
+  } catch (err) {
+    console.error('fetchEvidenceForPlaces error:', err.message);
+    // Return empty map on error - don't break the search
+    return new Map();
   }
-  return out;
 }
 
 module.exports = {

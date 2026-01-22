@@ -120,10 +120,16 @@ async function generateResultsExplanation(query, analysis, restaurants) {
     }));
 
     // Evidence layer (reviews + website menu snippets). Default: places only; website scrape must be explicitly enabled.
-    const evidenceMap = await fetchEvidenceForPlaces(
-      compactRestaurants.map(r => r.placeId),
-      GOOGLE_MAPS_API_KEY
-    );
+    let evidenceMap = new Map();
+    try {
+      evidenceMap = await fetchEvidenceForPlaces(
+        compactRestaurants.map(r => r.placeId),
+        GOOGLE_MAPS_API_KEY
+      );
+    } catch (evidenceErr) {
+      console.warn('Evidence fetch failed, continuing without evidence:', evidenceErr.message);
+      // Continue without evidence - don't break the search
+    }
     const evidence = compactRestaurants.map((r) => {
       const ev = evidenceMap.get(r.placeId);
       return {
