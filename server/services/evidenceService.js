@@ -5,6 +5,20 @@ const cheerio = require('cheerio');
 const CACHE_TTL_MS = Number(process.env.EVIDENCE_CACHE_TTL_MS || 6 * 60 * 60 * 1000); // 6h
 const cache = new Map(); // key -> { expiresAt, value }
 
+const RESPECT_ROBOTS = (process.env.EVIDENCE_RESPECT_ROBOTS || 'true') === 'true';
+const MIN_DELAY_MS = Number(process.env.EVIDENCE_MIN_DELAY_MS || 1200); // per host
+const MAX_HTML_BYTES = Number(process.env.EVIDENCE_MAX_HTML_BYTES || 1_000_000);
+const ALLOWED_DOMAINS = (process.env.EVIDENCE_ALLOWED_DOMAINS || '')
+  .split(',')
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
+const BLOCKED_DOMAINS = (process.env.EVIDENCE_BLOCKED_DOMAINS || '')
+  .split(',')
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
+
+const hostLastFetchAt = new Map(); // host -> ts
+
 function cacheGet(key) {
   const hit = cache.get(key);
   if (!hit) return null;
@@ -22,6 +36,38 @@ function cacheSet(key, value, ttlMs = CACHE_TTL_MS) {
 function normalizePlaceId(placeId) {
   if (!placeId) return placeId;
   return String(placeId).startsWith('places/') ? String(placeId).replace('places/', '') : String(placeId);
+}
+
+function getHost(url) {
+  try {
+    return new URL(url).host.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+function hostMatchesList(host, list) {
+  return list.some((d) => host === d || host.endsWith(`.${d}`));
+}
+
+function isHostAllowed(host) {
+  if (!host) return false;
+  if (BLOCKED_DOMAINS.length && hostMatchesList(host, BLOCKED_DOMAINS)) return false;
+  if (ALLOWED_DOMAINS.length) return hostMatchesList(host, ALLOWED_DOMAINS);
+  return true;
+}
+
+async function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function rateLimitHost(url) {
+  const host = getHost(url);
+  if (!host) return;
+  const last = hostLastFetchAt.get(host) || 0;
+  const wait = last + MIN_DELAY_MS - Date.now();
+  if (wait > 0) await sleep(wait);
+  hostLastFetchAt.set(host, Date.now());
 }
 
 function pickTop(arr, n) {
@@ -57,17 +103,132 @@ function absoluteUrl(base, href) {
   }
 }
 
+function parseRobotsTxt(txt) {
+  const lines = String(txt || '')
+    .split('\n')
+    .map((l) => l.split('#')[0].trim())
+    .filter(Boolean);
+
+  const groups = [];
+  let current = null;
+  for (const line of lines) {
+    const idx = line.indexOf(':');
+    if (idx === -1) continue;
+    const key = line.slice(0, idx).trim().toLowerCase();
+    const value = line.slice(idx + 1).trim();
+    if (key === 'user-agent') {
+      const ua = value.toLowerCase();
+      if (!current || current.hasRules) {
+        current = { agents: [], allow: [], disallow: [], hasRules: false };
+        groups.push(current);
+      }
+      current.agents.push(ua);
+    } else if ((key === 'allow' || key === 'disallow') && current) {
+      current.hasRules = true;
+      if (value) current[key].push(value);
+      else if (key === 'disallow') current.disallow.push('/'); // Disallow: (empty) = allow all per spec-ish; but keep safe? We'll not do this.
+    }
+  }
+  return groups;
+}
+
+function isPathAllowedByRobots(pathname, rules) {
+  const allow = rules.allow || [];
+  const disallow = rules.disallow || [];
+  // Longest match wins
+  let best = { type: 'allow', len: 0 };
+  for (const p of allow) {
+    if (p === '/' || pathname.startsWith(p)) {
+      if (p.length > best.len) best = { type: 'allow', len: p.length };
+    }
+  }
+  for (const p of disallow) {
+    if (!p) continue;
+    if (p === '/' || pathname.startsWith(p)) {
+      if (p.length > best.len) best = { type: 'disallow', len: p.length };
+    }
+  }
+  return best.type !== 'disallow';
+}
+
+async function getRobotsRulesForUrl(url) {
+  if (!RESPECT_ROBOTS) return null;
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    return null;
+  }
+  const host = u.host.toLowerCase();
+  const cacheKey = `robots:${host}`;
+  const cached = cacheGet(cacheKey);
+  if (cached !== null) return cached; // can be null
+
+  const robotsUrl = `${u.protocol}//${u.host}/robots.txt`;
+  try {
+    await rateLimitHost(robotsUrl);
+    const resp = await axios.get(robotsUrl, {
+      timeout: 6000,
+      maxRedirects: 3,
+      responseType: 'text',
+      maxContentLength: 200_000,
+      headers: {
+        'User-Agent': process.env.EVIDENCE_UA || 'OpenRiceBot/1.0 (+contact: admin@openrice.local)',
+        Accept: 'text/plain,*/*'
+      }
+    });
+    const groups = parseRobotsTxt(resp.data);
+    // choose best group: our UA token, else '*'
+    const ua = (process.env.EVIDENCE_ROBOTS_UA || 'openricebot').toLowerCase();
+    let group =
+      groups.find((g) => g.agents.some((a) => a !== '*' && ua.includes(a))) ||
+      groups.find((g) => g.agents.includes('*')) ||
+      null;
+
+    const rules = group ? { allow: group.allow, disallow: group.disallow } : null;
+    cacheSet(cacheKey, rules, 12 * 60 * 60 * 1000); // 12h
+    return rules;
+  } catch {
+    cacheSet(cacheKey, null, 12 * 60 * 60 * 1000);
+    return null;
+  }
+}
+
 async function fetchHtml(url, timeoutMs = 8000) {
+  const host = getHost(url);
+  if (!isHostAllowed(host)) {
+    throw new Error(`Host not allowed for scraping: ${host}`);
+  }
+
+  const rules = await getRobotsRulesForUrl(url);
+  if (rules) {
+    const u = new URL(url);
+    if (!isPathAllowedByRobots(u.pathname || '/', rules)) {
+      throw new Error(`Blocked by robots.txt: ${u.pathname}`);
+    }
+  }
+
+  await rateLimitHost(url);
   const resp = await axios.get(url, {
     timeout: timeoutMs,
     maxRedirects: 5,
+    responseType: 'text',
+    maxContentLength: MAX_HTML_BYTES,
+    maxBodyLength: MAX_HTML_BYTES,
     headers: {
-      // Be transparent + reduce blocks
-      'User-Agent': process.env.EVIDENCE_UA || 'OpenRiceBot/1.0 (+https://openrice.example)',
-      Accept: 'text/html,application/xhtml+xml'
+      // Be transparent + reduce blocks (overrideable)
+      'User-Agent': process.env.EVIDENCE_UA || 'OpenRiceBot/1.0 (+contact: admin@openrice.local)',
+      'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.6',
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
     }
   });
-  return String(resp.data || '');
+  const contentType = String(resp.headers?.['content-type'] || '').toLowerCase();
+  if (contentType && !contentType.includes('text/html') && !contentType.includes('application/xhtml')) {
+    throw new Error(`Unsupported content-type: ${contentType}`);
+  }
+  const html = String(resp.data || '');
+  if (!html || html.length < 50) throw new Error('Empty/too short HTML');
+  return html;
 }
 
 function extractJsonLd($) {
@@ -138,6 +299,7 @@ function extractMenuItemsFromJsonLd(jsonlds) {
 function extractTextSnippets($) {
   const title = cleanText($('title').first().text());
   const desc = cleanText($('meta[name="description"]').attr('content'));
+  const ogDesc = cleanText($('meta[property="og:description"]').attr('content'));
   const h = [];
   $('h1,h2,h3').each((_, el) => {
     const t = cleanText($(el).text());
@@ -151,7 +313,7 @@ function extractTextSnippets($) {
   });
   return {
     title,
-    description: desc,
+    description: desc || ogDesc,
     headings: pickTop(h, 8),
     listItems: pickTop(li, 15)
   };
@@ -166,6 +328,12 @@ async function fetchWebsiteEvidence(websiteUrl) {
   if (cached) return cached;
 
   try {
+    const host = getHost(websiteUrl);
+    if (!isHostAllowed(host)) {
+      cacheSet(cacheKey, null, 6 * 60 * 60 * 1000);
+      return null;
+    }
+
     const html = await fetchHtml(websiteUrl);
     const $ = cheerio.load(html);
 
@@ -189,6 +357,17 @@ async function fetchWebsiteEvidence(websiteUrl) {
       seen.add(u);
       uniqueMenuLinks.push(u);
       if (uniqueMenuLinks.length >= 2) break;
+    }
+
+    // If no explicit menu links, try common paths
+    if (uniqueMenuLinks.length === 0) {
+      const common = ['/menu', '/menus', '/food', '/餐牌', '/菜單', '/メニュー'];
+      for (const p of common) {
+        const candidate = absoluteUrl(websiteUrl, p);
+        if (!candidate) continue;
+        uniqueMenuLinks.push(candidate);
+        if (uniqueMenuLinks.length >= 2) break;
+      }
     }
 
     let menuPageItems = [];
