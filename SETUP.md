@@ -10,14 +10,18 @@
 PORT=5000
 MONGODB_URI=mongodb://localhost:27017/openrice
 
-# AI 提供商選擇：'openai' 或 'gemini'（默認：gemini）
-AI_PROVIDER=gemini
+# AI 提供商選擇：'ollama'（默認，本地模型）、'openai' 或 'gemini'
+AI_PROVIDER=ollama
 
-# Google Gemini API Key（推薦，免費額度大）
+# Ollama 配置（推薦，完全免費，數據隱私）
+OLLAMA_API_URL=http://localhost:11434
+OLLAMA_MODEL=llama2:7b
+
+# Google Gemini API Key（可選）
 GEMINI_API_KEY=your_gemini_api_key_here
 GEMINI_MODEL=gemini-pro
 
-# OpenAI API Key（可選，如果使用 OpenAI）
+# OpenAI API Key（可選）
 OPENAI_API_KEY=your_openai_api_key_here
 OPENAI_MODEL=gpt-4o-mini
 
@@ -35,7 +39,68 @@ REACT_APP_GOOGLE_MAPS_API_KEY=your_google_maps_api_key_here
 
 ## 獲取 API 密鑰
 
-### 1. Google Gemini API Key（推薦）
+### 1. Ollama（推薦，完全免費）
+
+**為什麼選擇 Ollama？**
+- ✅ **完全免費**：無需 API Key，無使用限制
+- ✅ **數據隱私**：模型在本地運行，數據不會上傳到第三方
+- ✅ **可自定義**：可以選擇不同的模型
+- ✅ **離線運行**：不需要網絡連接（本地部署時）
+
+**設置步驟：**
+
+#### 本地開發
+
+1. **安裝 Ollama**：
+   - Windows: 下載 https://ollama.com/download/windows
+   - Mac: `brew install ollama` 或下載安裝包
+   - Linux: `curl -fsSL https://ollama.com/install.sh | sh`
+
+2. **下載模型**（首次使用）：
+   ```bash
+   ollama pull llama2:7b
+   ```
+   
+   推薦的小模型（資源需求較低）：
+   - `tinyllama` (637MB) - 最小，適合測試
+   - `phi-2` (1.6GB) - 小但質量不錯
+   - `llama2:7b` (3.8GB) - 平衡質量和資源
+
+3. **啟動 Ollama 服務**：
+   ```bash
+   ollama serve
+   ```
+   服務會在 `http://localhost:11434` 運行
+
+4. **配置環境變量**：
+   在 `server/.env` 中設置：
+   ```env
+   AI_PROVIDER=ollama
+   OLLAMA_API_URL=http://localhost:11434
+   OLLAMA_MODEL=llama2:7b
+   ```
+
+#### Railway 部署
+
+1. **創建獨立的 Ollama 服務**：
+   - 參考 `ollama-service/README.md` 進行部署
+   - 獲取 Ollama 服務的 Railway URL
+
+2. **配置主後端服務**：
+   在 Railway 後端服務的環境變量中設置：
+   ```env
+   AI_PROVIDER=ollama
+   OLLAMA_API_URL=https://your-ollama-service.up.railway.app
+   OLLAMA_MODEL=llama2:7b
+   ```
+
+⚠️ **注意**：
+- Ollama 需要大量資源（至少 4GB RAM，推薦 8GB+）
+- Railway 免費計劃可能不足以運行 Ollama
+- 首次請求可能較慢（需要加載模型到內存）
+- 建議使用較小的模型（如 `phi-2` 或 `tinyllama`）以節省資源
+
+### 2. Google Gemini API Key（可選）
 
 **為什麼選擇 Gemini？**
 - 免費額度大：每分鐘 60 次請求，每月 1500 次
@@ -63,7 +128,7 @@ REACT_APP_GOOGLE_MAPS_API_KEY=your_google_maps_api_key_here
 5. 複製並保存到 `server/.env` 文件
 6. 設置 `AI_PROVIDER=openai`
 
-### 3. Google Maps API Key
+### 4. Google Maps API Key
 
 1. 訪問 https://console.cloud.google.com/
 2. 創建新項目或選擇現有項目

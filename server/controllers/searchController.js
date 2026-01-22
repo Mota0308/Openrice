@@ -5,7 +5,11 @@ const Restaurant = require('../models/Restaurant');
 const { fetchEvidenceForPlaces } = require('../services/evidenceService');
 
 // AI Provider 配置
-const AI_PROVIDER = process.env.AI_PROVIDER || 'gemini'; // 'openai' 或 'gemini'
+const AI_PROVIDER = process.env.AI_PROVIDER || 'ollama'; // 'ollama', 'openai', 或 'gemini'
+
+// Ollama 配置
+const OLLAMA_API_URL = process.env.OLLAMA_API_URL || 'http://localhost:11434';
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama2:7b';
 
 // OpenAI 初始化（如果使用）
 const openai = AI_PROVIDER === 'openai' ? new OpenAI({
@@ -27,11 +31,72 @@ function getGeminiModel() {
   return process.env.GEMINI_MODEL || 'gemini-pro';
 }
 
-// 统一的 AI 调用函数，支持 OpenAI 和 Gemini
+// 统一的 AI 调用函数，支持 Ollama、OpenAI 和 Gemini
 async function callAI(messages, systemPrompt, responseFormat = 'json_object') {
   const provider = AI_PROVIDER.toLowerCase();
   
-  if (provider === 'gemini') {
+  if (provider === 'ollama') {
+    // 构建 prompt
+    let fullPrompt = systemPrompt ? `${systemPrompt}\n\n` : '';
+    
+    // 处理消息数组
+    for (const msg of messages) {
+      if (msg.role === 'system') {
+        // System prompt 已经在上面处理了
+      } else if (msg.role === 'user') {
+        fullPrompt += `${msg.content}\n\n`;
+      } else if (msg.role === 'assistant') {
+        // Ollama 支持对话历史，但为了简化，这里只处理 user 消息
+      }
+    }
+    
+    // 如果要求 JSON 格式，在 prompt 中明确说明
+    if (responseFormat === 'json_object') {
+      fullPrompt += '\n請以 JSON 格式回覆，不要包含任何 markdown 格式或其他文字。只輸出有效的 JSON 物件。';
+    }
+    
+    try {
+      console.log(`Calling Ollama API at ${OLLAMA_API_URL} with model ${OLLAMA_MODEL}`);
+      
+      const response = await axios.post(`${OLLAMA_API_URL}/api/generate`, {
+        model: OLLAMA_MODEL,
+        prompt: fullPrompt,
+        stream: false,
+        options: {
+          temperature: 0.7,
+          top_p: 0.9,
+          num_predict: 2000, // 限制输出长度
+        }
+      }, {
+        timeout: 60000 // 60 秒超时（Ollama 可能需要更长时间）
+      });
+      
+      let content = response.data.response;
+      
+      if (!content) {
+        throw new Error('Ollama returned empty response');
+      }
+      
+      // 清理可能的 markdown 代码块
+      let cleanedText = content.trim();
+      if (cleanedText.startsWith('```json')) {
+        cleanedText = cleanedText.replace(/^```json\s*/s, '').replace(/\s*```$/s, '');
+      } else if (cleanedText.startsWith('```')) {
+        cleanedText = cleanedText.replace(/^```\s*/s, '').replace(/\s*```$/s, '');
+      }
+      
+      return {
+        content: cleanedText,
+        provider: 'ollama'
+      };
+    } catch (error) {
+      console.error('Ollama API error:', error.message);
+      if (error.response) {
+        console.error('Ollama API response:', error.response.data);
+      }
+      throw error;
+    }
+  } else if (provider === 'gemini') {
     if (!genAI) {
       throw new Error('Gemini API key not configured. Please set GEMINI_API_KEY environment variable.');
     }
@@ -115,7 +180,7 @@ async function callAI(messages, systemPrompt, responseFormat = 'json_object') {
       throw error;
     }
   } else {
-    throw new Error(`Unsupported AI provider: ${provider}. Supported providers: 'openai', 'gemini'`);
+    throw new Error(`Unsupported AI provider: ${provider}. Supported providers: 'ollama', 'openai', 'gemini'`);
   }
 }
 
@@ -238,12 +303,13 @@ function buildFallbackExplanation(query, analysis, restaurants) {
 
 async function generateResultsExplanation(query, analysis, restaurants) {
   try {
-    // 检查是否有可用的 AI API key
+    // 检查是否有可用的 AI 配置
+    const hasOllama = AI_PROVIDER === 'ollama' && OLLAMA_API_URL;
     const hasOpenAI = AI_PROVIDER === 'openai' && process.env.OPENAI_API_KEY;
     const hasGemini = AI_PROVIDER === 'gemini' && process.env.GEMINI_API_KEY;
     
-    if (!hasOpenAI && !hasGemini) {
-      console.log(`No ${AI_PROVIDER} API key configured, using fallback explanation`);
+    if (!hasOllama && !hasOpenAI && !hasGemini) {
+      console.log(`No ${AI_PROVIDER} configuration found, using fallback explanation`);
       return buildFallbackExplanation(query, analysis, restaurants);
     }
 
@@ -407,13 +473,14 @@ async function generateResultsExplanation(query, analysis, restaurants) {
 // 使用 AI 分析用戶的自然語言搜索
 async function analyzeSearchQuery(query) {
   try {
-    // 检查是否有可用的 AI API key
+    // 检查是否有可用的 AI 配置
+    const hasOllama = AI_PROVIDER === 'ollama' && OLLAMA_API_URL;
     const hasOpenAI = AI_PROVIDER === 'openai' && process.env.OPENAI_API_KEY;
     const hasGemini = AI_PROVIDER === 'gemini' && process.env.GEMINI_API_KEY;
     
-    if (!hasOpenAI && !hasGemini) {
-      console.warn(`${AI_PROVIDER.toUpperCase()} API key is not set, using fallback analysis`);
-      throw new Error(`${AI_PROVIDER.toUpperCase()} API key not configured`);
+    if (!hasOllama && !hasOpenAI && !hasGemini) {
+      console.warn(`${AI_PROVIDER.toUpperCase()} is not configured, using fallback analysis`);
+      throw new Error(`${AI_PROVIDER.toUpperCase()} not configured`);
     }
 
     const systemPrompt = "你是一個餐廳搜索助手，請『理解用戶意圖』而不是只抽關鍵字。請以 JSON 回傳以下欄位（沒有就給 null 或 []）：\n" +
