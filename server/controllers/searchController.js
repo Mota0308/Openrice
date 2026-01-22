@@ -104,12 +104,23 @@ async function callAI(messages, systemPrompt, responseFormat = 'json_object') {
           num_predict: 2000, // 限制输出长度
         }
       }, {
-        timeout: 60000 // 60 秒超时（Ollama 可能需要更长时间）
+        timeout: 120000, // 120 秒超时（模型加载可能需要更长时间）
+        validateStatus: (status) => status < 500 // 允许 4xx 错误，但记录它们
       });
+      
+      // 检查响应格式
+      if (!response.data || typeof response.data !== 'object') {
+        console.error('Ollama returned invalid response format:', typeof response.data, response.data);
+        throw new Error('Ollama returned invalid response format');
+      }
       
       let content = response.data.response;
       
       if (!content) {
+        // 检查是否有错误信息
+        if (response.data.error) {
+          throw new Error(`Ollama error: ${response.data.error}`);
+        }
         throw new Error('Ollama returned empty response');
       }
       
@@ -168,7 +179,24 @@ async function callAI(messages, systemPrompt, responseFormat = 'json_object') {
       }
       console.error('Ollama API error:', error.message);
       if (error.response) {
-        console.error('Ollama API response:', error.response.data);
+        console.error('Ollama API response status:', error.response.status);
+        console.error('Ollama API response headers:', error.response.headers);
+        // 记录响应内容的前 500 个字符，帮助调试
+        const responseData = error.response.data;
+        if (typeof responseData === 'string') {
+          console.error('Ollama API response (string, first 500 chars):', responseData.substring(0, 500));
+        } else if (typeof responseData === 'object') {
+          console.error('Ollama API response (object):', JSON.stringify(responseData, null, 2).substring(0, 500));
+        } else {
+          console.error('Ollama API response (unknown type):', typeof responseData, responseData);
+        }
+      } else if (error.request) {
+        console.error('Ollama API request error - no response received');
+        console.error('Request config:', {
+          url: error.config?.url,
+          method: error.config?.method,
+          timeout: error.config?.timeout
+        });
       }
       throw error;
     }
@@ -880,7 +908,26 @@ async function analyzeSearchQuery(query) {
       throw new Error(`Invalid ${AI_PROVIDER.toUpperCase()} response format`);
     }
 
-    const analysis = JSON.parse(aiResponse.content);
+    // 验证响应内容是否为有效的 JSON
+    let analysis;
+    try {
+      analysis = JSON.parse(aiResponse.content);
+    } catch (parseErr) {
+      console.error(`Failed to parse ${AI_PROVIDER.toUpperCase()} analysis response:`, parseErr.message);
+      console.error('Raw response (first 500 chars):', aiResponse.content.substring(0, 500));
+      // 如果解析失败，返回空分析而不是崩溃
+      return {
+        cuisine: null,
+        atmosphere: null,
+        priceRange: null,
+        preferredDishes: [],
+        ingredients: [],
+        dietary: [],
+        style: [],
+        occasion: null,
+        constraints: []
+      };
+    }
     // 正規化：確保 array 欄位是 array
     return {
       cuisine: analysis.cuisine ?? null,
