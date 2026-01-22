@@ -83,6 +83,12 @@ async function searchGooglePlaces(location, query, analysis) {
       searchQuery = `${analysis.cuisine} ${query}`;
     }
 
+    console.log('Searching Google Places with:', {
+      query: searchQuery,
+      location: `${location.lat},${location.lng}`,
+      radius: 5000
+    });
+
     // 使用 Text Search API
     const response = await axios.get('https://maps.googleapis.com/maps/api/place/textsearch/json', {
       params: {
@@ -95,15 +101,38 @@ async function searchGooglePlaces(location, query, analysis) {
       }
     });
 
+    console.log('Google Places API response status:', response.data.status);
+    console.log('Google Places API response:', {
+      status: response.data.status,
+      resultsCount: response.data.results ? response.data.results.length : 0,
+      errorMessage: response.data.error_message
+    });
+
+    // 處理不同的 API 狀態
     if (response.data.status === 'OK') {
-      return response.data.results;
+      return { success: true, results: response.data.results };
+    } else if (response.data.status === 'ZERO_RESULTS') {
+      console.log('No results found for query:', searchQuery);
+      return { success: true, results: [], message: '未找到符合條件的餐廳' };
+    } else if (response.data.status === 'REQUEST_DENIED') {
+      console.error('Google Places API REQUEST_DENIED:', response.data.error_message);
+      throw new Error(`API 請求被拒絕: ${response.data.error_message || '請檢查 API 密鑰和權限設置'}`);
+    } else if (response.data.status === 'OVER_QUERY_LIMIT') {
+      console.error('Google Places API OVER_QUERY_LIMIT');
+      throw new Error('API 配額已用完，請稍後再試');
+    } else if (response.data.status === 'INVALID_REQUEST') {
+      console.error('Google Places API INVALID_REQUEST:', response.data.error_message);
+      throw new Error(`無效的請求: ${response.data.error_message || '請檢查搜索參數'}`);
     } else {
-      console.error('Google Places API error:', response.data.status);
-      return [];
+      console.error('Google Places API error:', response.data.status, response.data.error_message);
+      throw new Error(`API 錯誤: ${response.data.status} - ${response.data.error_message || '未知錯誤'}`);
     }
   } catch (error) {
-    console.error('Google Places API request error:', error);
-    return [];
+    console.error('Google Places API request error:', error.message);
+    if (error.response) {
+      console.error('API Response:', error.response.data);
+    }
+    throw error; // 重新拋出錯誤，讓上層處理
   }
 }
 
@@ -167,27 +196,31 @@ exports.searchRestaurants = async (req, res) => {
     }
 
     // 2. 使用 Google Places API 搜索
-    let places;
+    let placesResult;
     try {
-      places = await searchGooglePlaces(location, query, analysis);
-      console.log('Google Places results:', places.length, 'places found');
+      placesResult = await searchGooglePlaces(location, query, analysis);
+      console.log('Google Places results:', placesResult.results ? placesResult.results.length : 0, 'places found');
     } catch (error) {
       console.error('Google Places search error:', error);
       return res.status(500).json({ 
         error: `搜索失敗: ${error.message}`,
-        success: false
+        success: false,
+        analysis: analysis
       });
     }
 
-    if (!places || places.length === 0) {
+    // 檢查是否有結果
+    if (!placesResult || !placesResult.results || placesResult.results.length === 0) {
       return res.json({
         success: true,
         count: 0,
         restaurants: [],
         analysis: analysis,
-        message: '未找到符合條件的餐廳'
+        message: placesResult?.message || '未找到符合條件的餐廳，請嘗試其他搜索關鍵詞'
       });
     }
+
+    const places = placesResult.results;
 
     // 3. 獲取詳細信息並格式化結果
     const restaurants = await Promise.all(
