@@ -169,7 +169,7 @@ async function getRobotsRulesForUrl(url) {
   try {
     await rateLimitHost(robotsUrl);
     const resp = await axios.get(robotsUrl, {
-      timeout: 6000,
+      timeout: 4000, // 方案 4: 优化超时，从 6000ms 减少到 4000ms
       maxRedirects: 3,
       responseType: 'text',
       maxContentLength: 200_000,
