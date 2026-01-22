@@ -96,8 +96,19 @@ async function fetchPlaceDetailsFromAPI(placeId) {
     if (error.response) {
       console.error('API Response status:', error.response.status);
       console.error('API Response data:', JSON.stringify(error.response.data, null, 2));
+      // 只有「真的不存在」才回傳 null 讓上層變成 404
+      if (error.response.status === 404) {
+        return null;
+      }
+      // 其他情況（權限/配額/未啟用/參數錯誤）應該回報給前端，而不是假裝 404
+      const apiMessage =
+        error.response.data?.error?.message ||
+        error.response.data?.message ||
+        error.message ||
+        'Unknown Places API error';
+      throw new Error(`Places API error (${error.response.status}): ${apiMessage}`);
     }
-    return null;
+    throw error;
   }
 }
 
@@ -128,7 +139,16 @@ exports.getRestaurantById = async (req, res) => {
         return res.status(500).json({ error: 'Google Maps API 密鑰未配置' });
       }
 
-      restaurant = await fetchPlaceDetailsFromAPI(placeId);
+      try {
+        restaurant = await fetchPlaceDetailsFromAPI(placeId);
+      } catch (apiError) {
+        console.error('Places API call failed while fetching restaurant:', apiError.message);
+        return res.status(502).json({
+          error: '無法從 Google Places 取得餐廳詳情（請檢查 Places API (New) 是否已啟用、API Key 權限與配額）',
+          details: apiError.message,
+          placeId
+        });
+      }
       
       if (!restaurant) {
         console.error('Failed to fetch restaurant from API:', placeId);
