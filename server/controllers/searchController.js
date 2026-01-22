@@ -106,7 +106,10 @@ function buildFallbackExplanation(query, analysis, restaurants) {
 
 async function generateResultsExplanation(query, analysis, restaurants) {
   try {
-    if (!process.env.OPENAI_API_KEY) return buildFallbackExplanation(query, analysis, restaurants);
+    if (!process.env.OPENAI_API_KEY) {
+      console.log('No OpenAI API key, using fallback explanation');
+      return buildFallbackExplanation(query, analysis, restaurants);
+    }
 
     const compactRestaurants = restaurants.slice(0, 12).map(r => ({
       placeId: r.placeId,
@@ -119,15 +122,20 @@ async function generateResultsExplanation(query, analysis, restaurants) {
       openingHours: r.openingHours
     }));
 
+    console.log('Generating explanation for', compactRestaurants.length, 'restaurants');
+
     // Evidence layer (reviews + website menu snippets). Default: places only; website scrape must be explicitly enabled.
     let evidenceMap = new Map();
     try {
+      console.log('Fetching evidence for places...');
       evidenceMap = await fetchEvidenceForPlaces(
         compactRestaurants.map(r => r.placeId),
         GOOGLE_MAPS_API_KEY
       );
+      console.log('Evidence fetched for', evidenceMap.size, 'places');
     } catch (evidenceErr) {
       console.warn('Evidence fetch failed, continuing without evidence:', evidenceErr.message);
+      console.warn('Evidence error stack:', evidenceErr.stack);
       // Continue without evidence - don't break the search
     }
     const evidence = compactRestaurants.map((r) => {
@@ -155,41 +163,64 @@ async function generateResultsExplanation(query, analysis, restaurants) {
       };
     });
 
-    const completion = await openai.chat.completions.create({
-      model: getOpenAIModel(),
-      response_format: { type: 'json_object' },
-      messages: [
-        {
-          role: 'system',
-          content:
-            '你是餐廳推薦解說助手，要能「理解用戶意圖」後再解釋為什麼推薦。' +
-            '你只能根據輸入的餐廳資料（名稱/地址/評分/價位/類型/營業時間等）與使用者查詢/意圖來解釋；' +
-            '不要捏造店家真實菜單、確定的配料、裝潢細節、折扣、服務特色。' +
-            '如果 evidence 提供了「評論片段」或「官網菜單/段落」，你可以引用它們來做更有依據的推論；' +
-            '若沒有證據，請保持保守並標註為推測。' +
-            '你可以給「可能適合嘗試」的菜式/配料/風格方向，但必須明確用推測語氣（例如：可能、或許、通常、建議先確認菜單）。' +
-            '【重要】避免模板化：每家餐廳的 reason 句式要有差異，不要全部只寫「評分高/評價多」。' +
-            '每家至少涵蓋 2 個角度（從：用戶意圖匹配、可能菜式/配料、風格/氛圍、評論證據、官網菜單證據、價位、是否營業中、類型匹配、熱度）。' +
-            '輸出 JSON：{summary: string, items: [{placeId: string, reason: string, highlights: string[], suggestedDishes: string[], suggestedIngredients: string[], suggestedStyle: string[], confidence: \"low\"|\"medium\"|\"high\", evidenceNotes: string[]}], disclaimer: string}。' +
-            '每家 reason 1-2 句話，highlights 3-5 點（要多樣化），文字用繁體中文。'
-        },
-        {
-          role: 'user',
-          content: JSON.stringify({
-            query,
-            analysis,
-            restaurants: compactRestaurants,
-            evidence
-          })
-        }
-      ]
-    });
+    let completion;
+    try {
+      console.log('Calling OpenAI API for explanation...');
+      completion = await openai.chat.completions.create({
+        model: getOpenAIModel(),
+        response_format: { type: 'json_object' },
+        messages: [
+          {
+            role: 'system',
+            content:
+              '你是餐廳推薦解說助手，要能「理解用戶意圖」後再解釋為什麼推薦。' +
+              '你只能根據輸入的餐廳資料（名稱/地址/評分/價位/類型/營業時間等）與使用者查詢/意圖來解釋；' +
+              '不要捏造店家真實菜單、確定的配料、裝潢細節、折扣、服務特色。' +
+              '如果 evidence 提供了「評論片段」或「官網菜單/段落」，你可以引用它們來做更有依據的推論；' +
+              '若沒有證據，請保持保守並標註為推測。' +
+              '你可以給「可能適合嘗試」的菜式/配料/風格方向，但必須明確用推測語氣（例如：可能、或許、通常、建議先確認菜單）。' +
+              '【重要】避免模板化：每家餐廳的 reason 句式要有差異，不要全部只寫「評分高/評價多」。' +
+              '每家至少涵蓋 2 個角度（從：用戶意圖匹配、可能菜式/配料、風格/氛圍、評論證據、官網菜單證據、價位、是否營業中、類型匹配、熱度）。' +
+              '輸出 JSON：{summary: string, items: [{placeId: string, reason: string, highlights: string[], suggestedDishes: string[], suggestedIngredients: string[], suggestedStyle: string[], confidence: \"low\"|\"medium\"|\"high\", evidenceNotes: string[]}], disclaimer: string}。' +
+              '每家 reason 1-2 句話，highlights 3-5 點（要多樣化），文字用繁體中文。'
+          },
+          {
+            role: 'user',
+            content: JSON.stringify({
+              query,
+              analysis,
+              restaurants: compactRestaurants,
+              evidence
+            })
+          }
+        ]
+      });
+      console.log('OpenAI API call successful');
+    } catch (openaiErr) {
+      console.error('OpenAI API call failed:', openaiErr.message);
+      console.error('OpenAI error details:', openaiErr.response?.data || openaiErr);
+      return buildFallbackExplanation(query, analysis, restaurants);
+    }
 
     const raw = completion?.choices?.[0]?.message?.content;
-    if (!raw) return buildFallbackExplanation(query, analysis, restaurants);
+    if (!raw) {
+      console.warn('OpenAI returned empty content, using fallback');
+      return buildFallbackExplanation(query, analysis, restaurants);
+    }
 
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return buildFallbackExplanation(query, analysis, restaurants);
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (parseErr) {
+      console.error('Failed to parse OpenAI response:', parseErr.message);
+      console.error('Raw response:', raw.substring(0, 200));
+      return buildFallbackExplanation(query, analysis, restaurants);
+    }
+
+    if (!parsed || typeof parsed !== 'object') {
+      console.warn('OpenAI returned invalid format, using fallback');
+      return buildFallbackExplanation(query, analysis, restaurants);
+    }
 
     // 兜底：確保字段存在
     const fallback = buildFallbackExplanation(query, analysis, restaurants);
