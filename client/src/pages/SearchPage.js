@@ -26,9 +26,9 @@ function SearchPage({ userId }) {
         },
         (err) => {
           // 不顯示控制台錯誤，使用默認位置
-          // 默認位置（台北）
-          setLocation({ lat: 25.0330, lng: 121.5654 });
-          setLocationInfo('使用默認位置（台北）');
+          // 默認位置（香港）
+          setLocation({ lat: 22.3193, lng: 114.1694 });
+          setLocationInfo('使用默認位置（香港）');
         },
         {
           timeout: 10000, // 10秒超時
@@ -36,9 +36,9 @@ function SearchPage({ userId }) {
         }
       );
     } else {
-      // 默認位置（台北）
-      setLocation({ lat: 25.0330, lng: 121.5654 });
-      setLocationInfo('使用默認位置（台北）');
+      // 默認位置（香港）
+      setLocation({ lat: 22.3193, lng: 114.1694 });
+      setLocationInfo('使用默認位置（香港）');
     }
   }, []);
 
