@@ -11,6 +11,7 @@ function SearchPage({ userId }) {
   const [error, setError] = useState(null);
   const [location, setLocation] = useState(null);
   const [searchAnalysis, setSearchAnalysis] = useState(null);
+  const [explanation, setExplanation] = useState(null);
   const [locationInfo, setLocationInfo] = useState(null);
 
   // 獲取用戶位置
@@ -57,12 +58,14 @@ function SearchPage({ userId }) {
     setError(null);
     setRestaurants([]);
     setSearchAnalysis(null);
+    setExplanation(null);
 
     try {
       console.log('Sending search request:', { query, location });
       const response = await api.post('/api/search', {
         query,
-        location
+        location,
+        explain: true
       });
 
       console.log('Search response:', response.data);
@@ -70,6 +73,7 @@ function SearchPage({ userId }) {
       if (response.data.success) {
         setRestaurants(response.data.restaurants || []);
         setSearchAnalysis(response.data.analysis);
+        setExplanation(response.data.explanation || null);
         
         if (!response.data.restaurants || response.data.restaurants.length === 0) {
           setError('未找到符合條件的餐廳，請嘗試其他搜索關鍵詞');
@@ -128,6 +132,30 @@ function SearchPage({ userId }) {
                 <span className="tag">價格：{searchAnalysis.priceRange}</span>
               )}
             </div>
+          </div>
+        )}
+
+        {explanation && (
+          <div className="ai-explanation">
+            <h3>AI 解說：</h3>
+            {explanation.summary && (
+              <p className="ai-explanation-summary">{explanation.summary}</p>
+            )}
+            {Array.isArray(explanation.items) && explanation.items.length > 0 && (
+              <div className="ai-explanation-highlights">
+                <div className="ai-explanation-subtitle">推薦亮點（前 3 家）：</div>
+                <ul>
+                  {explanation.items.slice(0, 3).map((it) => (
+                    <li key={it.placeId}>
+                      <span className="ai-explanation-reason">{it.reason}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {explanation.disclaimer && (
+              <div className="ai-explanation-disclaimer">{explanation.disclaimer}</div>
+            )}
           </div>
         )}
 

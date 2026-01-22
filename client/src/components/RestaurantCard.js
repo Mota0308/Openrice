@@ -50,6 +50,13 @@ function RestaurantCard({ restaurant, userId, onRemove }) {
 
         <p className="card-address">{restaurant.address}</p>
 
+        {restaurant.aiReason && (
+          <p className="card-ai-reason">
+            <span className="card-ai-label">AI 推薦：</span>
+            {restaurant.aiReason}
+          </p>
+        )}
+
         {restaurant.distance && (
           <p className="card-distance">距離：{restaurant.distance} 米</p>
         )}

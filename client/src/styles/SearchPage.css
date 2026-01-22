@@ -72,6 +72,42 @@
   font-size: 0.875rem;
 }
 
+.ai-explanation {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: #fff7e6;
+  border-radius: 8px;
+  border: 1px solid #ffe2a8;
+}
+
+.ai-explanation h3 {
+  font-size: 1rem;
+  margin-bottom: 0.5rem;
+  color: #6b5b2b;
+}
+
+.ai-explanation-summary {
+  margin: 0.25rem 0 0.75rem 0;
+  color: #333;
+  line-height: 1.5;
+}
+
+.ai-explanation-subtitle {
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+  color: #333;
+}
+
+.ai-explanation-highlights ul {
+  margin: 0.25rem 0 0.75rem 1.25rem;
+}
+
+.ai-explanation-disclaimer {
+  font-size: 0.85rem;
+  color: #6b5b2b;
+  margin-top: 0.5rem;
+}
+
 .results-header {
   margin-top: 2rem;
   margin-bottom: 1rem;
