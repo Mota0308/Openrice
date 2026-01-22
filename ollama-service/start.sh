@@ -3,7 +3,9 @@ set -eu
 
 # Railway routes public traffic to $PORT (usually 8080)
 PORT_TO_USE="${PORT:-8080}"
-export OLLAMA_HOST="${OLLAMA_HOST:-http://0.0.0.0:${PORT_TO_USE}}"
+# IMPORTANT: always bind to Railway's $PORT for public networking.
+# If you set OLLAMA_HOST in Railway Variables (e.g. to 11434), it will break public routing and cause 502.
+export OLLAMA_HOST="http://0.0.0.0:${PORT_TO_USE}"
 
 # Bootstrap a default model so /api/generate works after deploy/restart.
 # Note: without a persistent volume, models will be re-downloaded after each restart.
