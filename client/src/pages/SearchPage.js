@@ -13,6 +13,8 @@ function SearchPage({ userId }) {
   const [searchAnalysis, setSearchAnalysis] = useState(null);
   const [explanation, setExplanation] = useState(null);
   const [locationInfo, setLocationInfo] = useState(null);
+  const [explanationJobId, setExplanationJobId] = useState(null);
+  const [explanationStatus, setExplanationStatus] = useState(null);
   const [slowHint, setSlowHint] = useState(null);
 
   // 獲取用戶位置
@@ -44,6 +46,78 @@ function SearchPage({ userId }) {
     }
   }, []);
 
+  // 轮询获取解释结果
+  useEffect(() => {
+    if (!explanationJobId) return;
+
+    let pollCount = 0;
+    const maxPolls = 60; // 最多轮询 60 次（2 分钟）
+    const pollInterval = 2000; // 每 2 秒轮询一次
+
+    const pollExplanation = async () => {
+      if (pollCount >= maxPolls) {
+        console.warn('Explanation polling timeout');
+        setExplanationStatus('timeout');
+        setExplanationJobId(null);
+        return;
+      }
+
+      try {
+        const response = await api.get(`/api/search/explanation/${explanationJobId}`);
+        
+        if (response.data.status === 'completed') {
+          // 解释已完成
+          const explanation = response.data.explanation;
+          const reasonMap = response.data.reasonMap || {};
+          
+          // 更新餐厅列表，添加 AI 解释
+          setRestaurants(prevRestaurants => 
+            prevRestaurants.map(r => {
+              const it = reasonMap[r.placeId];
+              return it ? {
+                ...r,
+                aiReason: it.reason || null,
+                aiHighlights: it.highlights || null,
+                aiSuggestedDishes: it.suggestedDishes || null,
+                aiSuggestedIngredients: it.suggestedIngredients || null,
+                aiSuggestedStyle: it.suggestedStyle || null,
+                aiConfidence: it.confidence || null,
+                aiEvidenceNotes: it.evidenceNotes || null
+              } : r;
+            })
+          );
+          
+          setExplanation(explanation);
+          setExplanationStatus('completed');
+          setExplanationJobId(null);
+        } else if (response.data.status === 'failed') {
+          // 解释生成失败
+          console.error('Explanation generation failed:', response.data.error);
+          setExplanationStatus('failed');
+          setExplanationJobId(null);
+        } else {
+          // 仍在生成中，继续轮询
+          pollCount++;
+          setTimeout(pollExplanation, pollInterval);
+        }
+      } catch (error) {
+        console.error('Poll explanation error:', error);
+        pollCount++;
+        if (pollCount < maxPolls) {
+          setTimeout(pollExplanation, pollInterval);
+        } else {
+          setExplanationStatus('error');
+          setExplanationJobId(null);
+        }
+      }
+    };
+
+    // 开始轮询
+    const timer = setTimeout(pollExplanation, pollInterval);
+    
+    return () => clearTimeout(timer);
+  }, [explanationJobId]);
+
   const handleSearch = async (query) => {
     if (!query.trim()) {
       setError('請輸入搜索內容');
@@ -61,6 +135,8 @@ function SearchPage({ userId }) {
     setRestaurants([]);
     setSearchAnalysis(null);
     setExplanation(null);
+    setExplanationJobId(null);
+    setExplanationStatus(null);
 
     try {
       console.log('Sending search request:', { query, location });
@@ -81,7 +157,18 @@ function SearchPage({ userId }) {
       if (response.data.success) {
         setRestaurants(response.data.restaurants || []);
         setSearchAnalysis(response.data.analysis);
-        setExplanation(response.data.explanation || null);
+        
+        // 检查是否有异步解释任务
+        if (response.data.explanationJobId) {
+          setExplanationJobId(response.data.explanationJobId);
+          setExplanationStatus(response.data.explanationStatus || 'generating');
+          setExplanation(null); // 先清空，等待轮询获取
+        } else {
+          // 同步返回的解释（如果不需要解释或已禁用）
+          setExplanation(response.data.explanation || null);
+          setExplanationJobId(null);
+          setExplanationStatus(null);
+        }
         
         if (!response.data.restaurants || response.data.restaurants.length === 0) {
           setError('未找到符合條件的餐廳，請嘗試其他搜索關鍵詞');
@@ -159,6 +246,18 @@ function SearchPage({ userId }) {
                 <span className="tag">需求：{searchAnalysis.dietary.slice(0, 2).join('、')}</span>
               )}
             </div>
+          </div>
+        )}
+
+        {explanationStatus === 'generating' && (
+          <div className="ai-explanation-loading">
+            <p>⏳ AI 正在生成解釋中，請稍候...</p>
+          </div>
+        )}
+
+        {explanationStatus === 'failed' && (
+          <div className="ai-explanation-error">
+            <p>⚠️ AI 解釋生成失敗，但餐廳列表已顯示</p>
           </div>
         )}
 

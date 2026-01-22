@@ -3,6 +3,11 @@ const OpenAI = require('openai');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const Restaurant = require('../models/Restaurant');
 const { fetchEvidenceForPlaces } = require('../services/evidenceService');
+const crypto = require('crypto');
+
+// 解释结果缓存（内存存储，生产环境建议使用 Redis）
+const explanationCache = new Map();
+const EXPLANATION_TTL = 10 * 60 * 1000; // 10 分钟过期
 
 // AI Provider 配置
 const AI_PROVIDER = process.env.AI_PROVIDER || 'ollama'; // 'ollama', 'openai', 或 'gemini'
@@ -1312,34 +1317,56 @@ exports.searchRestaurants = async (req, res) => {
     const shouldExplain = req.body.explain !== false;
     let explanation = null;
     let restaurantsWithReasons = validRestaurants;
+    let explanationJobId = null;
 
     if (shouldExplain) {
-      explanation = await generateResultsExplanation(query, analysis, validRestaurants);
-      const reasonMap = new Map(
-        (explanation.items || []).map((it) => [it.placeId, it])
-      );
-      restaurantsWithReasons = validRestaurants.map((r) => {
-        const it = reasonMap.get(r.placeId);
-        return {
-          ...r,
-          aiReason: it?.reason || null,
-          aiHighlights: it?.highlights || null,
-          aiSuggestedDishes: it?.suggestedDishes || null
-          ,
-          aiSuggestedIngredients: it?.suggestedIngredients || null,
-          aiSuggestedStyle: it?.suggestedStyle || null,
-          aiConfidence: it?.confidence || null,
-          aiEvidenceNotes: it?.evidenceNotes || null
-        };
+      // 生成任务 ID
+      explanationJobId = crypto.randomBytes(16).toString('hex');
+      
+      // 立即返回餐厅列表，不等待 AI 解释
+      res.json({
+        success: true,
+        count: validRestaurants.length,
+        restaurants: validRestaurants,
+        analysis: analysis,
+        explanation: null, // 先返回 null
+        explanationJobId: explanationJobId,
+        explanationStatus: 'generating' // 状态：generating, completed, failed
       });
+
+      // 后台异步生成解释（不阻塞响应）
+      generateResultsExplanation(query, analysis, validRestaurants)
+        .then(explanation => {
+          // 将解释结果保存到缓存
+          explanationCache.set(explanationJobId, {
+            explanation,
+            timestamp: Date.now(),
+            status: 'completed'
+          });
+          
+          console.log(`Explanation generated for job ${explanationJobId}`);
+        })
+        .catch(error => {
+          console.error(`Explanation generation failed for job ${explanationJobId}:`, error);
+          // 保存错误状态
+          explanationCache.set(explanationJobId, {
+            explanation: null,
+            timestamp: Date.now(),
+            status: 'failed',
+            error: error.message
+          });
+        });
+      
+      return; // 提前返回，不执行后面的代码
     }
 
+    // 如果不需要解释，直接返回
     res.json({
       success: true,
       count: restaurantsWithReasons.length,
       restaurants: restaurantsWithReasons,
       analysis: analysis,
-      explanation
+      explanation: null
     });
 
   } catch (error) {
@@ -1358,6 +1385,85 @@ exports.searchRestaurants = async (req, res) => {
     };
     
     res.status(500).json(errorResponse);
+  }
+};
+
+// 获取解释结果（用于轮询）
+exports.getExplanation = async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    
+    if (!jobId) {
+      return res.status(400).json({
+        success: false,
+        error: '缺少 jobId 参数'
+      });
+    }
+
+    // 清理过期缓存
+    const now = Date.now();
+    for (const [key, value] of explanationCache.entries()) {
+      if (now - value.timestamp > EXPLANATION_TTL) {
+        explanationCache.delete(key);
+      }
+    }
+
+    const cached = explanationCache.get(jobId);
+    
+    if (!cached) {
+      return res.json({
+        success: false,
+        status: 'not_found',
+        message: '解释任务不存在或已过期'
+      });
+    }
+
+    if (cached.status === 'completed') {
+      // 解释已完成，返回结果并应用到餐厅列表
+      const explanation = cached.explanation;
+      const reasonMap = {};
+      if (Array.isArray(explanation.items)) {
+        explanation.items.forEach((it) => {
+          if (it.placeId) {
+            reasonMap[it.placeId] = {
+              reason: it.reason || null,
+              highlights: it.highlights || null,
+              suggestedDishes: it.suggestedDishes || null,
+              suggestedIngredients: it.suggestedIngredients || null,
+              suggestedStyle: it.suggestedStyle || null,
+              confidence: it.confidence || null,
+              evidenceNotes: it.evidenceNotes || null
+            };
+          }
+        });
+      }
+
+      return res.json({
+        success: true,
+        status: 'completed',
+        explanation: explanation,
+        reasonMap: reasonMap
+      });
+    } else if (cached.status === 'failed') {
+      return res.json({
+        success: false,
+        status: 'failed',
+        error: cached.error || '解释生成失败'
+      });
+    } else {
+      // 仍在生成中
+      return res.json({
+        success: true,
+        status: 'generating',
+        message: '解释正在生成中，请稍候...'
+      });
+    }
+  } catch (error) {
+    console.error('Get explanation error:', error);
+    res.status(500).json({
+      success: false,
+      error: '获取解释结果失败'
+    });
   }
 };
 
