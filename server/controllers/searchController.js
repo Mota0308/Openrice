@@ -655,8 +655,8 @@ async function generateResultsExplanation(query, analysis, restaurants) {
     }
 
     // 处理所有餐厅，确保每间餐厅都有 AI 解释
-    // 如果餐厅数量太多，可以分批处理，但这里先处理所有餐厅
-    const maxRestaurants = Number(process.env.MAX_RESTAURANTS_FOR_EXPLANATION || 20); // 默认最多 20 间
+    // 方案 5: 减少 AI 解释的餐厅数量，平衡速度和体验（默认 10 间，可通过环境变量调整）
+    const maxRestaurants = Number(process.env.MAX_RESTAURANTS_FOR_EXPLANATION || 10);
     const compactRestaurants = restaurants.slice(0, maxRestaurants).map(r => ({
       placeId: r.placeId,
       name: r.name,
@@ -671,11 +671,15 @@ async function generateResultsExplanation(query, analysis, restaurants) {
     console.log(`Generating explanation for ${compactRestaurants.length} restaurants (out of ${restaurants.length} total)`);
 
     // Evidence layer (reviews + website menu snippets). Default: places only; website scrape must be explicitly enabled.
+    // 方案 2: 只获取前几个餐厅的详细证据，加快速度
+    const maxEvidenceRestaurants = Number(process.env.MAX_EVIDENCE_RESTAURANTS || 6);
+    const evidencePlaceIds = compactRestaurants.slice(0, maxEvidenceRestaurants).map(r => r.placeId);
+    
     let evidenceMap = new Map();
     try {
-      console.log('Fetching evidence for places...');
+      console.log(`Fetching evidence for ${evidencePlaceIds.length} places (out of ${compactRestaurants.length} total)...`);
       evidenceMap = await fetchEvidenceForPlaces(
-        compactRestaurants.map(r => r.placeId),
+        evidencePlaceIds,
         GOOGLE_MAPS_API_KEY
       );
       console.log('Evidence fetched for', evidenceMap.size, 'places');

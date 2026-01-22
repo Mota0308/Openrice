@@ -195,7 +195,8 @@ async function getRobotsRulesForUrl(url) {
   }
 }
 
-async function fetchHtml(url, timeoutMs = 8000) {
+// 方案 4: 优化网站抓取超时，默认从 8000ms 减少到 5000ms
+async function fetchHtml(url, timeoutMs = 5000) {
   const host = getHost(url);
   if (!isHostAllowed(host)) {
     throw new Error(`Host not allowed for scraping: ${host}`);
@@ -695,10 +696,12 @@ async function fetchPlacesEvidence(placeId, googleApiKey) {
 
   for (const mask of masks) {
     try {
+      // 方案 4: 优化超时设置，从 8000ms 减少到 5000ms，加快响应速度
+      const timeout = Number(process.env.PLACES_EVIDENCE_TIMEOUT_MS || 5000);
       const resp = await axios.get(`https://places.googleapis.com/v1/places/${pid}`, {
         headers: { ...baseHeaders, 'X-Goog-FieldMask': mask },
         params: { languageCode: 'zh-TW' },
-        timeout: 8000
+        timeout: timeout
       });
 
       const place = resp.data || {};
@@ -756,32 +759,49 @@ async function fetchEvidenceForPlaces(placeIds, googleApiKey) {
     const ids = pickTop(placeIds, maxPlaces).map(normalizePlaceId);
 
     const out = new Map();
-    // small concurrency (avoid hammering websites/APIs)
-    for (const pid of ids) {
+    
+    // 方案 1: 并行化证据获取（而不是串行）
+    // 这样可以同时获取多个餐厅的证据，大幅减少总时间
+    const evidencePromises = ids.map(async (pid) => {
       try {
+        // 并行获取 Places 证据
         const placeEv = await fetchPlacesEvidence(pid, googleApiKey);
         let webEv = null;
+        
         if (placeEv?.websiteUri) {
           try {
-            webEv = await fetchWebsiteEvidence(placeEv.websiteUri);
+            // 网站证据获取也并行，但设置超时避免阻塞太久
+            const websiteTimeout = Number(process.env.WEBSITE_EVIDENCE_TIMEOUT_MS || 5000);
+            webEv = await Promise.race([
+              fetchWebsiteEvidence(placeEv.websiteUri),
+              new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Website fetch timeout')), websiteTimeout)
+              )
+            ]);
           } catch (webErr) {
-            console.warn(`Website evidence fetch failed for ${pid}:`, webErr.message);
+            // 网站证据获取失败不影响整体流程
+            if (webErr.message !== 'Website fetch timeout') {
+              console.warn(`Website evidence fetch failed for ${pid}:`, webErr.message);
+            }
             // Continue without website evidence
           }
         }
-        out.set(pid, {
-          place: placeEv,
-          website: webEv
-        });
+        
+        return { pid, place: placeEv, website: webEv };
       } catch (placeErr) {
         console.warn(`Places evidence fetch failed for ${pid}:`, placeErr.message);
-        // Continue without evidence for this place
-        out.set(pid, {
-          place: null,
-          website: null
-        });
+        return { pid, place: null, website: null };
       }
-    }
+    });
+    
+    // 等待所有证据获取完成（并行执行）
+    const results = await Promise.all(evidencePromises);
+    
+    // 构建结果 Map
+    results.forEach(({ pid, place, website }) => {
+      out.set(pid, { place, website });
+    });
+    
     return out;
   } catch (err) {
     console.error('fetchEvidenceForPlaces error:', err.message);
