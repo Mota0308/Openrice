@@ -23,6 +23,10 @@ function simpleHash(str) {
   return h >>> 0;
 }
 
+function pickTop(arr, n) {
+  return (Array.isArray(arr) ? arr : []).filter(Boolean).slice(0, n);
+}
+
 function asArrayOfStrings(value) {
   if (!value) return [];
   if (Array.isArray(value)) return value.filter(Boolean).map(String);
