@@ -87,6 +87,20 @@
   margin-right: 0.25rem;
 }
 
+.card-ai-chips {
+  margin-bottom: 0.5rem;
+}
+
+.card-ai-chip {
+  display: inline-block;
+  font-size: 0.85rem;
+  color: #4a3f22;
+  background: #fff3d1;
+  border: 1px solid #ffe2a8;
+  border-radius: 999px;
+  padding: 0.2rem 0.6rem;
+}
+
 .card-distance {
   color: #999;
   font-size: 0.875rem;

@@ -57,6 +57,24 @@ function RestaurantCard({ restaurant, userId, onRemove }) {
           </p>
         )}
 
+        {(Array.isArray(restaurant.aiSuggestedDishes) && restaurant.aiSuggestedDishes.length > 0) && (
+          <div className="card-ai-chips">
+            <span className="card-ai-chip">可能菜式：{restaurant.aiSuggestedDishes.slice(0, 3).join('、')}</span>
+          </div>
+        )}
+
+        {(Array.isArray(restaurant.aiSuggestedIngredients) && restaurant.aiSuggestedIngredients.length > 0) && (
+          <div className="card-ai-chips">
+            <span className="card-ai-chip">可能配料：{restaurant.aiSuggestedIngredients.slice(0, 3).join('、')}</span>
+          </div>
+        )}
+
+        {(Array.isArray(restaurant.aiSuggestedStyle) && restaurant.aiSuggestedStyle.length > 0) && (
+          <div className="card-ai-chips">
+            <span className="card-ai-chip">可能風格：{restaurant.aiSuggestedStyle.slice(0, 2).join('、')}</span>
+          </div>
+        )}
+
         {restaurant.distance && (
           <p className="card-distance">距離：{restaurant.distance} 米</p>
         )}

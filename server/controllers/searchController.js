@@ -8,6 +8,23 @@ const openai = new OpenAI({
 
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 
+function getOpenAIModel() {
+  return process.env.OPENAI_MODEL || 'gpt-4o-mini';
+}
+
+function asArrayOfStrings(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.filter(Boolean).map(String);
+  if (typeof value === 'string') {
+    // 支援用頓號/逗號/空格分隔
+    return value
+      .split(/[、,，\n]/g)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
 function cuisineToSuggestedDishes(cuisine) {
   const map = {
     '日式': ['壽司/刺身', '拉麵', '天婦羅', '燒鳥'],
@@ -23,12 +40,20 @@ function cuisineToSuggestedDishes(cuisine) {
 function buildFallbackExplanation(query, analysis, restaurants) {
   const cuisine = analysis?.cuisine || null;
   const atmosphere = analysis?.atmosphere || null;
+  const preferredDishes = asArrayOfStrings(analysis?.preferredDishes);
+  const ingredients = asArrayOfStrings(analysis?.ingredients);
+  const style = asArrayOfStrings(analysis?.style);
+  const dietary = asArrayOfStrings(analysis?.dietary);
   const tags = [cuisine && `菜系：${cuisine}`, atmosphere && `氛圍：${atmosphere}`].filter(Boolean);
 
   const items = restaurants.slice(0, 20).map((r) => {
     const bits = [];
     if (cuisine) bits.push(`符合你要的「${cuisine}」方向`);
     if (atmosphere) bits.push(`更偏「${atmosphere}」取向（以類型/熱度推斷）`);
+    if (preferredDishes.length) bits.push(`你提到想吃：${preferredDishes.slice(0, 3).join('、')}`);
+    if (ingredients.length) bits.push(`你偏好配料：${ingredients.slice(0, 3).join('、')}`);
+    if (style.length) bits.push(`你偏好風格：${style.slice(0, 3).join('、')}`);
+    if (dietary.length) bits.push(`飲食需求：${dietary.slice(0, 3).join('、')}`);
     if (r.rating && r.rating >= 4.2) bits.push(`評分較高（${Number(r.rating).toFixed(1)}）`);
     if (r.userRatingsTotal && r.userRatingsTotal >= 200) bits.push(`評價數較多（${r.userRatingsTotal}）`);
     const reason = bits.length ? bits.join('；') : '與你的搜尋需求相近，且附近熱度較高';
@@ -38,18 +63,23 @@ function buildFallbackExplanation(query, analysis, restaurants) {
       reason,
       highlights: [
         cuisine ? `偏向 ${cuisine} 類型` : '餐廳類型匹配',
+        preferredDishes.length ? `你想吃：${preferredDishes.slice(0, 2).join('、')}` : null,
+        ingredients.length ? `配料偏好：${ingredients.slice(0, 2).join('、')}` : null,
         r.rating ? `評分：${Number(r.rating).toFixed(1)}` : null,
         r.priceLevel ? `價位：${'$'.repeat(r.priceLevel)}` : null
       ].filter(Boolean),
       // 注意：Google Places 不提供完整菜單；這裡僅給「可能適合嘗試」的方向
-      suggestedDishes: cuisineToSuggestedDishes(cuisine)
+      suggestedDishes: preferredDishes.length ? preferredDishes.slice(0, 4) : cuisineToSuggestedDishes(cuisine),
+      suggestedIngredients: ingredients.length ? ingredients.slice(0, 6) : [],
+      suggestedStyle: style.length ? style.slice(0, 4) : [],
+      confidence: 'low'
     };
   });
 
   return {
     summary: `我根據你的需求「${query}」${tags.length ? `（${tags.join('，')}）` : ''}，優先挑選附近餐廳中類型匹配、評分/熱度較高的選項，並為每家整理一個推薦理由。`,
     items,
-    disclaimer: '提示：Google Places 不提供完整菜單；「可能適合嘗試」僅是依菜系常見菜式給的方向，實際以店家菜單為準。'
+    disclaimer: '提示：Google Places 不提供完整菜單/食材資訊；「菜式/配料/風格」多為推測與常見搭配方向，實際以店家菜單與現場為準。'
   };
 }
 
@@ -64,20 +94,23 @@ async function generateResultsExplanation(query, analysis, restaurants) {
       rating: r.rating,
       userRatingsTotal: r.userRatingsTotal,
       priceLevel: r.priceLevel,
-      types: r.types
+      types: r.types,
+      openingHours: r.openingHours
     }));
 
     const completion = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
+      model: getOpenAIModel(),
       response_format: { type: 'json_object' },
       messages: [
         {
           role: 'system',
           content:
-            '你是餐廳推薦解說助手。你只能根據輸入的餐廳資料（名稱/地址/評分/類型等）與使用者查詢來解釋，不要捏造店家特色、菜單、折扣、裝潢、服務等未提供資訊。' +
-            '你可以提供「可能適合嘗試」的菜品方向，但必須明確標註為推測、以菜單為準。' +
-            '輸出 JSON：{summary: string, items: [{placeId: string, reason: string, highlights: string[], suggestedDishes: string[]}], disclaimer: string}。' +
-            '每家 reason 1 句話，highlights 2-3 點，文字用繁體中文。'
+            '你是餐廳推薦解說助手，要能「理解用戶意圖」後再解釋為什麼推薦。' +
+            '你只能根據輸入的餐廳資料（名稱/地址/評分/價位/類型/營業時間等）與使用者查詢/意圖來解釋；' +
+            '不要捏造店家真實菜單、確定的配料、裝潢細節、折扣、服務特色。' +
+            '你可以給「可能適合嘗試」的菜式/配料/風格方向，但必須明確用推測語氣（例如：可能、或許、通常、建議先確認菜單）。' +
+            '輸出 JSON：{summary: string, items: [{placeId: string, reason: string, highlights: string[], suggestedDishes: string[], suggestedIngredients: string[], suggestedStyle: string[], confidence: \"low\"|\"medium\"|\"high\"}], disclaimer: string}。' +
+            '每家 reason 1-2 句話，highlights 2-4 點，文字用繁體中文。'
         },
         {
           role: 'user',
@@ -97,12 +130,24 @@ async function generateResultsExplanation(query, analysis, restaurants) {
     if (!parsed || typeof parsed !== 'object') return buildFallbackExplanation(query, analysis, restaurants);
 
     // 兜底：確保字段存在
+    const fallback = buildFallbackExplanation(query, analysis, restaurants);
+    const normalizedItems = Array.isArray(parsed.items)
+      ? parsed.items.map((it) => ({
+          placeId: it?.placeId,
+          reason: it?.reason || null,
+          highlights: Array.isArray(it?.highlights) ? it.highlights : [],
+          suggestedDishes: Array.isArray(it?.suggestedDishes) ? it.suggestedDishes : [],
+          suggestedIngredients: Array.isArray(it?.suggestedIngredients) ? it.suggestedIngredients : [],
+          suggestedStyle: Array.isArray(it?.suggestedStyle) ? it.suggestedStyle : [],
+          confidence: ['low', 'medium', 'high'].includes(it?.confidence) ? it.confidence : 'low'
+        }))
+      : fallback.items;
     return {
-      summary: parsed.summary || buildFallbackExplanation(query, analysis, restaurants).summary,
-      items: Array.isArray(parsed.items) ? parsed.items : buildFallbackExplanation(query, analysis, restaurants).items,
+      summary: parsed.summary || fallback.summary,
+      items: normalizedItems,
       disclaimer:
         parsed.disclaimer ||
-        '提示：Google Places 不提供完整菜單；「可能適合嘗試」僅是推測方向，實際以店家菜單為準。'
+        '提示：Google Places 不提供完整菜單/食材資訊；「菜式/配料/風格」多為推測與常見搭配方向，實際以店家菜單與現場為準。'
     };
   } catch (e) {
     console.error('AI explanation error:', e.message);
@@ -119,11 +164,22 @@ async function analyzeSearchQuery(query) {
     }
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
+      model: getOpenAIModel(),
       messages: [
         {
           role: "system",
-          content: "你是一個餐廳搜索助手。分析用戶的搜索查詢，提取以下信息：餐廳類型（如：日式、中式、火鍋等）、氛圍（如：適合約會、家庭聚餐等）、價格範圍、其他要求。以 JSON 格式返回結果。"
+          content:
+            "你是一個餐廳搜索助手，請『理解用戶意圖』而不是只抽關鍵字。請以 JSON 回傳以下欄位（沒有就給 null 或 []）：\n" +
+            "- cuisine: 菜系（例：日式/火鍋/韓式）\n" +
+            "- atmosphere: 氛圍/場合（例：約會/家庭/朋友聚會/商務）\n" +
+            "- priceRange: 價格偏好（例：平價/中價位/高檔）\n" +
+            "- preferredDishes: 使用者明確想吃的菜式（array，例如：麻辣鍋、壽司、牛排）\n" +
+            "- ingredients: 使用者提到的食材/配料偏好（array，例如：牛肉、海鮮、蔬菜、芝士）\n" +
+            "- dietary: 飲食限制/需求（array，例如：素食、清真、無麩質、低卡、無辣）\n" +
+            "- style: 風格偏好（array，例如：精緻、傳統、現代、打卡、安靜）\n" +
+            "- occasion: 用餐情境（例：生日/紀念日/工作餐）\n" +
+            "- constraints: 其他條件（array，例如：要開到很晚、可訂位、可帶小孩）\n" +
+            "只輸出 JSON 物件。"
         },
         {
           role: "user",
@@ -138,7 +194,18 @@ async function analyzeSearchQuery(query) {
     }
 
     const analysis = JSON.parse(completion.choices[0].message.content);
-    return analysis;
+    // 正規化：確保 array 欄位是 array
+    return {
+      cuisine: analysis.cuisine ?? null,
+      atmosphere: analysis.atmosphere ?? null,
+      priceRange: analysis.priceRange ?? null,
+      preferredDishes: asArrayOfStrings(analysis.preferredDishes),
+      ingredients: asArrayOfStrings(analysis.ingredients),
+      dietary: asArrayOfStrings(analysis.dietary),
+      style: asArrayOfStrings(analysis.style),
+      occasion: analysis.occasion ?? null,
+      constraints: asArrayOfStrings(analysis.constraints)
+    };
   } catch (error) {
     console.error('OpenAI API error:', error.message);
     console.error('OpenAI error details:', error.response?.data || error);
@@ -146,7 +213,13 @@ async function analyzeSearchQuery(query) {
     return {
       cuisine: extractCuisine(query),
       atmosphere: extractAtmosphere(query),
-      priceRange: null
+      priceRange: null,
+      preferredDishes: [],
+      ingredients: [],
+      dietary: [],
+      style: [],
+      occasion: null,
+      constraints: []
     };
   }
 }
@@ -518,6 +591,10 @@ exports.searchRestaurants = async (req, res) => {
           aiReason: it?.reason || null,
           aiHighlights: it?.highlights || null,
           aiSuggestedDishes: it?.suggestedDishes || null
+          ,
+          aiSuggestedIngredients: it?.suggestedIngredients || null,
+          aiSuggestedStyle: it?.suggestedStyle || null,
+          aiConfidence: it?.confidence || null
         };
       });
     }

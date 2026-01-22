@@ -131,6 +131,18 @@ function SearchPage({ userId }) {
               {searchAnalysis.priceRange && (
                 <span className="tag">價格：{searchAnalysis.priceRange}</span>
               )}
+              {Array.isArray(searchAnalysis.preferredDishes) && searchAnalysis.preferredDishes.length > 0 && (
+                <span className="tag">菜式：{searchAnalysis.preferredDishes.slice(0, 3).join('、')}</span>
+              )}
+              {Array.isArray(searchAnalysis.ingredients) && searchAnalysis.ingredients.length > 0 && (
+                <span className="tag">配料：{searchAnalysis.ingredients.slice(0, 3).join('、')}</span>
+              )}
+              {Array.isArray(searchAnalysis.style) && searchAnalysis.style.length > 0 && (
+                <span className="tag">風格：{searchAnalysis.style.slice(0, 2).join('、')}</span>
+              )}
+              {Array.isArray(searchAnalysis.dietary) && searchAnalysis.dietary.length > 0 && (
+                <span className="tag">需求：{searchAnalysis.dietary.slice(0, 2).join('、')}</span>
+              )}
             </div>
           </div>
         )}
@@ -147,7 +159,22 @@ function SearchPage({ userId }) {
                 <ul>
                   {explanation.items.slice(0, 3).map((it) => (
                     <li key={it.placeId}>
-                      <span className="ai-explanation-reason">{it.reason}</span>
+                      <div className="ai-explanation-reason">{it.reason}</div>
+                      {(Array.isArray(it.suggestedDishes) && it.suggestedDishes.length > 0) && (
+                        <div className="ai-explanation-meta">
+                          <span className="ai-chip">可能菜式：{it.suggestedDishes.slice(0, 3).join('、')}</span>
+                        </div>
+                      )}
+                      {(Array.isArray(it.suggestedIngredients) && it.suggestedIngredients.length > 0) && (
+                        <div className="ai-explanation-meta">
+                          <span className="ai-chip">可能配料：{it.suggestedIngredients.slice(0, 3).join('、')}</span>
+                        </div>
+                      )}
+                      {(Array.isArray(it.suggestedStyle) && it.suggestedStyle.length > 0) && (
+                        <div className="ai-explanation-meta">
+                          <span className="ai-chip">可能風格：{it.suggestedStyle.slice(0, 2).join('、')}</span>
+                        </div>
+                      )}
                     </li>
                   ))}
                 </ul>

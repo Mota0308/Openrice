@@ -102,6 +102,25 @@
   margin: 0.25rem 0 0.75rem 1.25rem;
 }
 
+.ai-explanation-reason {
+  color: #333;
+  line-height: 1.5;
+}
+
+.ai-explanation-meta {
+  margin-top: 0.25rem;
+}
+
+.ai-chip {
+  display: inline-block;
+  font-size: 0.85rem;
+  color: #4a3f22;
+  background: #fff3d1;
+  border: 1px solid #ffe2a8;
+  border-radius: 999px;
+  padding: 0.25rem 0.6rem;
+}
+
 .ai-explanation-disclaimer {
   font-size: 0.85rem;
   color: #6b5b2b;
