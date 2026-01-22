@@ -345,7 +345,7 @@ function pickUnique(arr, usedSet, n) {
 }
 
 // 用證據把 suggestedDishes 變成「店家專屬」並做跨店去重，避免每家都一樣
-function applyRestaurantSpecificSuggestions(items, evidenceArr) {
+function applyRestaurantSpecificSuggestions(items, evidenceArr, restaurantsArr, cuisineHint) {
   if (!Array.isArray(items) || items.length === 0) return items;
 
   const evidenceById = new Map(
@@ -354,11 +354,18 @@ function applyRestaurantSpecificSuggestions(items, evidenceArr) {
       .filter(([k]) => k)
   );
 
+  const restaurantById = new Map(
+    (Array.isArray(restaurantsArr) ? restaurantsArr : [])
+      .map((r) => [r?.placeId, r])
+      .filter(([k]) => k)
+  );
+
   const usedDishes = new Set();
 
   return items.map((it) => {
     const placeId = it?.placeId;
     const ev = placeId ? evidenceById.get(placeId) : null;
+    const r = placeId ? restaurantById.get(placeId) : null;
 
     const menuItems = uniqStrings(ev?.website?.menuItems);
     const menuCandidates = uniqStrings(ev?.website?.menuCandidates);
@@ -374,6 +381,13 @@ function applyRestaurantSpecificSuggestions(items, evidenceArr) {
     const aiDishes = uniqStrings(it?.suggestedDishes).filter((x) => !isGenericDishName(x));
     if (aiDishes.length > 0) {
       const chosen = pickUnique(aiDishes, usedDishes, 4);
+      return { ...it, suggestedDishes: chosen };
+    }
+
+    // Still empty: infer from restaurant name/types so each restaurant has different-ish suggestions
+    const inferred = inferFallbackDishesFromNameAndTypes(r || { placeId }, cuisineHint).filter((x) => !isGenericDishName(x));
+    if (inferred.length > 0) {
+      const chosen = pickUnique(inferred, usedDishes, 4);
       return { ...it, suggestedDishes: chosen };
     }
 
@@ -419,6 +433,10 @@ function inferFallbackDishesFromNameAndTypes(r, cuisine) {
   };
 
   // Simple heuristics by name keywords (zh/en)
+  if (name.includes('羊肉粉') || (name.includes('羊肉') && name.includes('粉'))) add(['羊肉粉', '酸辣羊肉粉', '清湯羊肉粉']);
+  if (name.includes('牛腩') && (name.includes('麵') || name.includes('面'))) add(['清湯牛腩麵', '咖喱牛腩', '牛筋腩']);
+  if (name.includes('牛肉') && name.includes('粉')) add(['牛肉粉', '酸辣牛肉粉', '清湯牛肉粉']);
+  if (name.includes('米粉')) add(['米粉', '湯粉', '乾撈米粉']);
   if (name.includes('ramen') || name.includes('拉麵') || name.includes('ラーメン')) add(['豚骨拉麵', '醬油拉麵', '沾麵']);
   if (name.includes('sushi') || name.includes('壽司') || name.includes('鮨')) add(['握壽司', '刺身拼盤', '卷物']);
   if (name.includes('yakitori') || name.includes('燒鳥') || name.includes('串燒')) add(['串燒拼盤', '燒雞翼', '燒牛舌']);
@@ -648,7 +666,8 @@ async function generateResultsExplanation(query, analysis, restaurants) {
         '【菜式/配料輸出規則（用來解決「每家都一樣」）】\n' +
         '1. suggestedDishes 必須「店家專屬」：\n' +
         '   - 若 evidence.website.menuItems 或 evidence.website.menuCandidates 有內容：請從該店清單中挑 2-4 個最貼近用戶意圖的菜名；不同餐廳之間不要重複同一組菜名。\n' +
-        '   - 若沒有官網菜單候選：可用評論片段/摘要推斷，但必須用推測語氣，且不同餐廳不要重複同一組。\n' +
+        '   - 若沒有官網菜單候選：可用評論片段/摘要推斷；或直接從餐廳名稱中抽取明顯的菜式關鍵詞（例如：羊肉粉、牛腩麵、拉麵、壽司、燒鳥、烤肉、火鍋）作為其中 1-2 項。\n' +
+        '     以上推斷必須用推測語氣，且不同餐廳不要重複同一組。\n' +
         '   - 禁止輸出過於泛用的詞（例如：招牌菜、熱門主食、特色小食、甜品、飲品、拼盤、套餐）。\n' +
         '2. suggestedIngredients 同理：\n' +
         '   - 若菜名/評論中明顯包含食材詞可提取（例如：牛肉、海鮮、芝士、豚骨、麻辣等），可列 2-4 個；\n' +
@@ -725,7 +744,12 @@ async function generateResultsExplanation(query, analysis, restaurants) {
     // 检查并确保多样性
     const diverseItems = ensureDiversity(normalizedItems);
     // 用 evidence 覆寫 suggestedDishes（優先菜單證據）+ 跨餐廳去重
-    const restaurantSpecificItems = applyRestaurantSpecificSuggestions(diverseItems, evidence);
+    const restaurantSpecificItems = applyRestaurantSpecificSuggestions(
+      diverseItems,
+      evidence,
+      compactRestaurants,
+      analysis?.cuisine || null
+    );
     
     return {
       summary: parsed.summary || fallback.summary,
