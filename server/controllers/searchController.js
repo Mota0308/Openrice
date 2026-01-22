@@ -274,6 +274,113 @@ function ensureDiversity(items) {
   return items;
 }
 
+function normText(s) {
+  return String(s || '').trim();
+}
+
+function uniqStrings(arr) {
+  const out = [];
+  const seen = new Set();
+  for (const v of Array.isArray(arr) ? arr : []) {
+    const s = normText(v);
+    if (!s) continue;
+    const k = s.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(s);
+  }
+  return out;
+}
+
+function isGenericDishName(s) {
+  const t = normText(s);
+  if (!t) return true;
+  const generic = new Set([
+    '招牌菜',
+    '熱門主食',
+    '特色小食',
+    '甜品',
+    '飲品',
+    '湯品',
+    '點心',
+    '前菜',
+    '拼盤',
+    '主食',
+    '小食',
+    '套餐',
+    '飲料',
+    '特色菜',
+    '推薦菜'
+  ]);
+  if (generic.has(t)) return true;
+  // Often fallback-style combos like "壽司/刺身" are not restaurant-specific.
+  if (t.includes('/') || t.includes('／')) return true;
+  // Too short usually means category (e.g. "火鍋") rather than a dish.
+  if (t.length <= 2) return true;
+  return false;
+}
+
+function pickUnique(arr, usedSet, n) {
+  const out = [];
+  for (const v of arr) {
+    const s = normText(v);
+    if (!s) continue;
+    const k = s.toLowerCase();
+    if (usedSet.has(k)) continue;
+    usedSet.add(k);
+    out.push(s);
+    if (out.length >= n) break;
+  }
+  // If still not enough, allow reuse (but keep order).
+  if (out.length < n) {
+    for (const v of arr) {
+      const s = normText(v);
+      if (!s) continue;
+      if (out.includes(s)) continue;
+      out.push(s);
+      if (out.length >= n) break;
+    }
+  }
+  return out;
+}
+
+// 用證據把 suggestedDishes 變成「店家專屬」並做跨店去重，避免每家都一樣
+function applyRestaurantSpecificSuggestions(items, evidenceArr) {
+  if (!Array.isArray(items) || items.length === 0) return items;
+
+  const evidenceById = new Map(
+    (Array.isArray(evidenceArr) ? evidenceArr : [])
+      .map((e) => [e?.placeId, e])
+      .filter(([k]) => k)
+  );
+
+  const usedDishes = new Set();
+
+  return items.map((it) => {
+    const placeId = it?.placeId;
+    const ev = placeId ? evidenceById.get(placeId) : null;
+
+    const menuItems = uniqStrings(ev?.website?.menuItems);
+    const menuCandidates = uniqStrings(ev?.website?.menuCandidates);
+    const candidates = uniqStrings(menuItems.concat(menuCandidates)).filter((x) => !isGenericDishName(x));
+
+    // If we have restaurant-specific evidence, always prefer that.
+    if (candidates.length > 0) {
+      const chosen = pickUnique(candidates, usedDishes, 4);
+      return { ...it, suggestedDishes: chosen };
+    }
+
+    // No evidence: at least remove generic buckets & de-dupe across restaurants.
+    const aiDishes = uniqStrings(it?.suggestedDishes).filter((x) => !isGenericDishName(x));
+    if (aiDishes.length > 0) {
+      const chosen = pickUnique(aiDishes, usedDishes, 4);
+      return { ...it, suggestedDishes: chosen };
+    }
+
+    return it;
+  });
+}
+
 function asArrayOfStrings(value) {
   if (!value) return [];
   if (Array.isArray(value)) return value.filter(Boolean).map(String);
@@ -297,6 +404,47 @@ function cuisineToSuggestedDishes(cuisine) {
     '泰式': ['冬陰功', '青咖喱', '炒河粉', '芒果糯米飯']
   };
   return map[cuisine] || ['招牌菜', '熱門主食', '特色小食', '甜品/飲品'];
+}
+
+function inferFallbackDishesFromNameAndTypes(r, cuisine) {
+  const name = normText(r?.name).toLowerCase();
+  const types = (Array.isArray(r?.types) ? r.types : []).map((t) => String(t || '').toLowerCase());
+
+  const candidates = [];
+  const add = (arr) => {
+    for (const x of arr) {
+      const s = normText(x);
+      if (s) candidates.push(s);
+    }
+  };
+
+  // Simple heuristics by name keywords (zh/en)
+  if (name.includes('ramen') || name.includes('拉麵') || name.includes('ラーメン')) add(['豚骨拉麵', '醬油拉麵', '沾麵']);
+  if (name.includes('sushi') || name.includes('壽司') || name.includes('鮨')) add(['握壽司', '刺身拼盤', '卷物']);
+  if (name.includes('yakitori') || name.includes('燒鳥') || name.includes('串燒')) add(['串燒拼盤', '燒雞翼', '燒牛舌']);
+  if (name.includes('bbq') || name.includes('烤肉')) add(['烤肉拼盤', '五花肉', '牛舌']);
+  if (name.includes('hotpot') || name.includes('火鍋') || name.includes('麻辣')) add(['麻辣湯底', '鴛鴦鍋', '手切牛肉']);
+  if (name.includes('steak') || name.includes('牛排')) add(['熟成牛排', '前菜沙拉', '甜品']);
+  if (name.includes('pizza') || name.includes('披薩')) add(['瑪格麗特披薩', '焗烤', '沙拉']);
+  if (name.includes('cafe') || name.includes('咖啡')) add(['咖啡', '蛋糕', '輕食']);
+  if (name.includes('dim sum') || name.includes('點心') || name.includes('飲茶')) add(['蝦餃', '燒賣', '腸粉']);
+
+  // Heuristics by Google types
+  if (types.includes('bar') || types.includes('pub')) add(['精釀啤酒', '下酒小食', '雞翼']);
+
+  // Fall back to cuisine suggestions but avoid generic buckets & vary selection by seed
+  const cuisineDefaults = cuisineToSuggestedDishes(cuisine).filter((x) => !isGenericDishName(x));
+  add(cuisineDefaults);
+
+  // De-dupe & pick a varied subset
+  const unique = uniqStrings(candidates).filter((x) => !isGenericDishName(x));
+  const seed = simpleHash(r?.placeId || r?.name || '');
+  if (unique.length <= 4) return unique;
+
+  // rotate selection based on seed so different restaurants don't always show same first 4
+  const start = seed % unique.length;
+  const rotated = unique.slice(start).concat(unique.slice(0, start));
+  return rotated.slice(0, 4);
 }
 
 function buildFallbackExplanation(query, analysis, restaurants) {
@@ -341,7 +489,9 @@ function buildFallbackExplanation(query, analysis, restaurants) {
         r.openingHours?.openNow === true ? '目前顯示營業中' : null
       ].filter(Boolean),
       // 注意：Google Places 不提供完整菜單；這裡僅給「可能適合嘗試」的方向
-      suggestedDishes: preferredDishes.length ? preferredDishes.slice(0, 4) : cuisineToSuggestedDishes(cuisine),
+      suggestedDishes: preferredDishes.length
+        ? preferredDishes.slice(0, 4)
+        : inferFallbackDishesFromNameAndTypes(r, cuisine),
       suggestedIngredients: ingredients.length ? ingredients.slice(0, 6) : [],
       suggestedStyle: style.length ? style.slice(0, 4) : [],
       confidence: 'low'
@@ -495,6 +645,15 @@ async function generateResultsExplanation(query, analysis, restaurants) {
         '- 或引用 evidence.place.reviews 的一小段（不要超過 20 字）。\n' +
         '如果真的完全沒有任何具體證據，才可以用「類型/價位/是否營業」等資訊，但此時 confidence 必須是 low，且不要把評分當作主亮點。\n\n' +
         
+        '【菜式/配料輸出規則（用來解決「每家都一樣」）】\n' +
+        '1. suggestedDishes 必須「店家專屬」：\n' +
+        '   - 若 evidence.website.menuItems 或 evidence.website.menuCandidates 有內容：請從該店清單中挑 2-4 個最貼近用戶意圖的菜名；不同餐廳之間不要重複同一組菜名。\n' +
+        '   - 若沒有官網菜單候選：可用評論片段/摘要推斷，但必須用推測語氣，且不同餐廳不要重複同一組。\n' +
+        '   - 禁止輸出過於泛用的詞（例如：招牌菜、熱門主食、特色小食、甜品、飲品、拼盤、套餐）。\n' +
+        '2. suggestedIngredients 同理：\n' +
+        '   - 若菜名/評論中明顯包含食材詞可提取（例如：牛肉、海鮮、芝士、豚骨、麻辣等），可列 2-4 個；\n' +
+        '   - 沒有證據就留空陣列 []，不要硬編。\n\n' +
+        
         '你可以給「可能適合嘗試」的菜式/配料/風格方向，但必須明確用推測語氣（例如：可能、或許、通常、建議先確認菜單）。\n\n' +
         
         '【輸出格式】\n' +
@@ -565,10 +724,12 @@ async function generateResultsExplanation(query, analysis, restaurants) {
     
     // 检查并确保多样性
     const diverseItems = ensureDiversity(normalizedItems);
+    // 用 evidence 覆寫 suggestedDishes（優先菜單證據）+ 跨餐廳去重
+    const restaurantSpecificItems = applyRestaurantSpecificSuggestions(diverseItems, evidence);
     
     return {
       summary: parsed.summary || fallback.summary,
-      items: diverseItems,
+      items: restaurantSpecificItems,
       disclaimer:
         parsed.disclaimer ||
         '提示：Google Places 不提供完整菜單/食材資訊；「菜式/配料/風格」多為推測與常見搭配方向，實際以店家菜單與現場為準。'
