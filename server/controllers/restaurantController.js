@@ -7,9 +7,20 @@ const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 // 從 Google Places API 獲取餐廳詳情
 async function fetchPlaceDetailsFromAPI(placeId) {
   try {
+    // 處理 place ID 格式：新 API 可能返回 "places/..." 格式，需要移除 "places/" 前綴
+    let normalizedPlaceId = placeId;
+    if (placeId.startsWith('places/')) {
+      normalizedPlaceId = placeId.replace('places/', '');
+    }
+    
+    console.log('Fetching place details from API:', {
+      originalPlaceId: placeId,
+      normalizedPlaceId: normalizedPlaceId
+    });
+
     // 使用新的 Places API (New) - Get Place
     const response = await axios.get(
-      `https://places.googleapis.com/v1/places/${placeId}`,
+      `https://places.googleapis.com/v1/places/${normalizedPlaceId}`,
       {
         headers: {
           'Content-Type': 'application/json',
@@ -25,9 +36,21 @@ async function fetchPlaceDetailsFromAPI(placeId) {
     if (response.data) {
       const place = response.data;
       
+      // 處理 place ID：確保存儲時使用標準格式（不包含 "places/" 前綴）
+      let storedPlaceId = place.id;
+      if (place.id && place.id.startsWith('places/')) {
+        storedPlaceId = place.id.replace('places/', '');
+      }
+      
+      console.log('Place details fetched:', {
+        apiPlaceId: place.id,
+        storedPlaceId: storedPlaceId,
+        name: place.displayName?.text
+      });
+      
       // 轉換新 API 格式到數據庫格式
       const restaurantData = {
-        placeId: place.id,
+        placeId: storedPlaceId, // 存儲標準化的 place ID
         name: place.displayName?.text || '',
         address: place.formattedAddress || '',
         location: {
@@ -58,9 +81,9 @@ async function fetchPlaceDetailsFromAPI(placeId) {
         }
       }
 
-      // 保存到數據庫
+      // 保存到數據庫（使用標準化的 place ID）
       const savedRestaurant = await Restaurant.findOneAndUpdate(
-        { placeId: place.id },
+        { placeId: storedPlaceId },
         restaurantData,
         { upsert: true, new: true }
       );
@@ -71,7 +94,8 @@ async function fetchPlaceDetailsFromAPI(placeId) {
   } catch (error) {
     console.error('Fetch place details from API error:', error.message);
     if (error.response) {
-      console.error('API Response:', error.response.data);
+      console.error('API Response status:', error.response.status);
+      console.error('API Response data:', JSON.stringify(error.response.data, null, 2));
     }
     return null;
   }
@@ -80,11 +104,21 @@ async function fetchPlaceDetailsFromAPI(placeId) {
 // 根據 ID 獲取餐廳詳情
 exports.getRestaurantById = async (req, res) => {
   try {
-    const placeId = req.params.id;
+    let placeId = req.params.id;
     console.log('Fetching restaurant:', placeId);
 
-    // 首先從數據庫查找
+    // 標準化 place ID（移除可能的 "places/" 前綴）
+    if (placeId.startsWith('places/')) {
+      placeId = placeId.replace('places/', '');
+    }
+
+    // 首先從數據庫查找（嘗試兩種格式）
     let restaurant = await Restaurant.findOne({ placeId });
+    
+    // 如果沒找到，嘗試查找帶 "places/" 前綴的格式
+    if (!restaurant && !placeId.startsWith('places/')) {
+      restaurant = await Restaurant.findOne({ placeId: `places/${placeId}` });
+    }
     
     // 如果數據庫中沒有，從 Google Places API 獲取
     if (!restaurant) {
@@ -97,14 +131,20 @@ exports.getRestaurantById = async (req, res) => {
       restaurant = await fetchPlaceDetailsFromAPI(placeId);
       
       if (!restaurant) {
-        return res.status(404).json({ error: '餐廳不存在或無法獲取餐廳信息' });
+        console.error('Failed to fetch restaurant from API:', placeId);
+        return res.status(404).json({ 
+          error: '餐廳不存在或無法獲取餐廳信息',
+          placeId: placeId
+        });
       }
     }
 
+    console.log('Restaurant found:', restaurant.name);
     res.json(restaurant);
   } catch (error) {
     console.error('Get restaurant error:', error);
-    res.status(500).json({ error: '獲取餐廳信息失敗' });
+    console.error('Error stack:', error.stack);
+    res.status(500).json({ error: '獲取餐廳信息失敗', details: error.message });
   }
 };
 

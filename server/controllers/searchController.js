@@ -134,8 +134,15 @@ async function searchGooglePlaces(location, query, analysis) {
     // 新 API 返回格式不同
     if (response.data.places && response.data.places.length > 0) {
       // 转换新 API 格式到旧格式，以便后续处理
-      const convertedResults = response.data.places.map(place => ({
-        place_id: place.id,
+      const convertedResults = response.data.places.map(place => {
+        // 標準化 place ID：移除 "places/" 前綴（如果存在）
+        let normalizedPlaceId = place.id;
+        if (place.id && place.id.startsWith('places/')) {
+          normalizedPlaceId = place.id.replace('places/', '');
+        }
+        
+        return {
+        place_id: normalizedPlaceId,
         name: place.displayName?.text || '',
         formatted_address: place.formattedAddress || '',
         geometry: {
@@ -152,7 +159,8 @@ async function searchGooglePlaces(location, query, analysis) {
         formatted_phone_number: place.nationalPhoneNumber || null,
         website: place.websiteUri || null,
         opening_hours: place.regularOpeningHours || place.currentOpeningHours || null
-      }));
+      };
+      });
 
       return { success: true, results: convertedResults };
     } else {
