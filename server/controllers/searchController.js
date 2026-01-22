@@ -150,6 +150,20 @@ async function generateResultsExplanation(query, analysis, restaurants) {
           ? {
               websiteUri: ev.place.websiteUri,
               openingNow: ev.place.openingNow,
+              primaryTypeDisplayName: ev.place.primaryTypeDisplayName,
+              editorialSummary: ev.place.editorialSummary,
+              attributes: {
+                takeout: ev.place.takeout,
+                delivery: ev.place.delivery,
+                dineIn: ev.place.dineIn,
+                reservable: ev.place.reservable,
+                outdoorSeating: ev.place.outdoorSeating,
+                liveMusic: ev.place.liveMusic,
+                menuForChildren: ev.place.menuForChildren,
+                servesBeer: ev.place.servesBeer,
+                servesWine: ev.place.servesWine,
+                servesVegetarianFood: ev.place.servesVegetarianFood
+              },
               reviews: (ev.place.reviews || []).map((x) => ({
                 rating: x.rating,
                 text: x.text
@@ -160,6 +174,7 @@ async function generateResultsExplanation(query, analysis, restaurants) {
           ? {
               websiteUrl: ev.website.websiteUrl,
               menuItems: (ev.website.menuItems || []).slice(0, 12),
+              menuCandidates: (ev.website.menuCandidates || []).slice(0, 12),
               description: ev.website.base?.description || null,
               headings: (ev.website.base?.headings || []).slice(0, 6)
             }
@@ -182,6 +197,11 @@ async function generateResultsExplanation(query, analysis, restaurants) {
               '不要捏造店家真實菜單、確定的配料、裝潢細節、折扣、服務特色。' +
               '如果 evidence 提供了「評論片段」或「官網菜單/段落」，你可以引用它們來做更有依據的推論；' +
               '若沒有證據，請保持保守並標註為推測。' +
+              '【強制】每家餐廳的 highlights 必須包含至少 1 條「具體內容」：' +
+              '優先使用 evidence.website.menuItems / evidence.website.menuCandidates 的菜名；' +
+              '或引用 evidence.place.editorialSummary 的關鍵片語；' +
+              '或引用 evidence.place.reviews 的一小段（不要超過 20 字）。' +
+              '如果真的完全沒有任何具體證據，才可以用「類型/價位/是否營業」等資訊，但此時 confidence 必須是 low，且不要把評分當作主亮點。' +
               '你可以給「可能適合嘗試」的菜式/配料/風格方向，但必須明確用推測語氣（例如：可能、或許、通常、建議先確認菜單）。' +
               '【重要】避免模板化：每家餐廳的 reason 句式要有差異，不要全部只寫「評分高/評價多」。' +
               '每家至少涵蓋 2 個角度（從：用戶意圖匹配、可能菜式/配料、風格/氛圍、評論證據、官網菜單證據、價位、是否營業中、類型匹配、熱度）。' +

@@ -319,6 +319,57 @@ function extractTextSnippets($) {
   };
 }
 
+function isProbablyDishName(t) {
+  if (!t) return false;
+  const s = cleanText(t);
+  if (s.length < 2 || s.length > 32) return false;
+  // avoid generic UI words
+  const bad = ['首頁', '關於', '聯絡', '預約', '訂位', '電話', '地址', '營業', '隱私', '條款', 'cookie', 'login', 'sign'];
+  if (bad.some((b) => s.toLowerCase().includes(b))) return false;
+  // require some letters / CJK
+  if (!/[A-Za-z\u4e00-\u9fff]/.test(s)) return false;
+  return true;
+}
+
+function extractMenuCandidates($) {
+  const out = [];
+  // 1) price-like rows: "XXX HK$88" / "$88"
+  $('body')
+    .text()
+    .split('\n')
+    .map((x) => cleanText(x))
+    .filter((x) => x.length > 0 && x.length <= 80)
+    .forEach((line) => {
+      if (!/(HK\$|\$)\s?\d{2,4}/i.test(line)) return;
+      // take left part as dish name
+      const name = cleanText(line.replace(/(HK\$|\$)\s?\d{2,4}.*/i, ''));
+      if (isProbablyDishName(name)) out.push(name);
+    });
+
+  // 2) common menu containers
+  $('[class*="menu"],[id*="menu"],[class*="dish"],[class*="item"],[class*="food"]').each((_, el) => {
+    const t = cleanText($(el).text());
+    if (isProbablyDishName(t)) out.push(t);
+  });
+
+  // 3) list items as fallback (already filtered in snippets, but dish-like)
+  $('li').each((_, el) => {
+    const t = cleanText($(el).text());
+    if (isProbablyDishName(t)) out.push(t);
+  });
+
+  const seen = new Set();
+  const dedup = [];
+  for (const n of out) {
+    const k = n.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    dedup.push(n);
+    if (dedup.length >= 30) break;
+  }
+  return dedup;
+}
+
 async function fetchWebsiteEvidence(websiteUrl) {
   if (!websiteUrl) return null;
   if (process.env.ENABLE_WEBSITE_SCRAPE !== 'true') return null;
@@ -372,6 +423,7 @@ async function fetchWebsiteEvidence(websiteUrl) {
 
     let menuPageItems = [];
     let menuPageSnippets = [];
+    let menuCandidates = [];
     for (const link of uniqueMenuLinks) {
       try {
         const mh = await fetchHtml(link, 8000);
@@ -381,6 +433,7 @@ async function fetchWebsiteEvidence(websiteUrl) {
         menuPageItems = menuPageItems.concat(mitems);
         const snips = extractTextSnippets($$);
         menuPageSnippets.push({ url: link, ...snips });
+        menuCandidates = menuCandidates.concat(extractMenuCandidates($$));
       } catch {
         // ignore per-page
       }
@@ -391,12 +444,14 @@ async function fetchWebsiteEvidence(websiteUrl) {
       Array.from(new Set(menuItems.concat(menuPageItems))).filter(Boolean),
       20
     );
+    const allCandidates = pickTop(Array.from(new Set(menuCandidates)).filter(Boolean), 20);
 
     const result = {
       websiteUrl,
       base: baseSnips,
       menuLinks: uniqueMenuLinks,
       menuItems: allMenuItems,
+      menuCandidates: allCandidates,
       menuPages: menuPageSnippets
     };
     cacheSet(cacheKey, result);
@@ -421,6 +476,8 @@ async function fetchPlacesEvidence(placeId, googleApiKey) {
 
   // Try with reviews; if field mask rejected, fallback to without.
   const masks = [
+    // rich mask (may fail if some fields not enabled for project)
+    'id,displayName,websiteUri,types,primaryType,primaryTypeDisplayName,priceLevel,rating,userRatingCount,regularOpeningHours,currentOpeningHours,editorialSummary,reviews,takeout,delivery,dineIn,reservable,servesBeer,servesWine,servesVegetarianFood,outdoorSeating,liveMusic,menuForChildren',
     'id,displayName,websiteUri,types,priceLevel,rating,userRatingCount,regularOpeningHours,currentOpeningHours,reviews',
     'id,displayName,websiteUri,types,priceLevel,rating,userRatingCount,regularOpeningHours,currentOpeningHours'
   ];
@@ -444,11 +501,25 @@ async function fetchPlacesEvidence(placeId, googleApiKey) {
         placeId: pid,
         name: place.displayName?.text || null,
         websiteUri: place.websiteUri || null,
+        primaryType: place.primaryType || null,
+        primaryTypeDisplayName: place.primaryTypeDisplayName?.text || null,
+        editorialSummary: place.editorialSummary?.text || null,
         rating: place.rating || null,
         userRatingCount: place.userRatingCount || null,
         types: place.types || [],
         priceLevel: place.priceLevel || null,
         openingNow: place.currentOpeningHours?.openNow ?? null,
+        // boolean attributes (if available)
+        takeout: place.takeout ?? null,
+        delivery: place.delivery ?? null,
+        dineIn: place.dineIn ?? null,
+        reservable: place.reservable ?? null,
+        outdoorSeating: place.outdoorSeating ?? null,
+        liveMusic: place.liveMusic ?? null,
+        menuForChildren: place.menuForChildren ?? null,
+        servesBeer: place.servesBeer ?? null,
+        servesWine: place.servesWine ?? null,
+        servesVegetarianFood: place.servesVegetarianFood ?? null,
         reviews
       };
 
