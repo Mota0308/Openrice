@@ -11,6 +11,11 @@ const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 // 使用 OpenAI 分析用戶的自然語言搜索
 async function analyzeSearchQuery(query) {
   try {
+    if (!process.env.OPENAI_API_KEY) {
+      console.warn('OPENAI_API_KEY is not set, using fallback analysis');
+      throw new Error('OpenAI API key not configured');
+    }
+
     const completion = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
       messages: [
@@ -26,10 +31,15 @@ async function analyzeSearchQuery(query) {
       response_format: { type: "json_object" }
     });
 
+    if (!completion.choices || !completion.choices[0] || !completion.choices[0].message) {
+      throw new Error('Invalid OpenAI response format');
+    }
+
     const analysis = JSON.parse(completion.choices[0].message.content);
     return analysis;
   } catch (error) {
-    console.error('OpenAI API error:', error);
+    console.error('OpenAI API error:', error.message);
+    console.error('OpenAI error details:', error.response?.data || error);
     // 如果 API 失敗，返回基本分析
     return {
       cuisine: extractCuisine(query),
@@ -161,13 +171,21 @@ async function getPlaceDetails(placeId) {
 // 主搜索控制器
 exports.searchRestaurants = async (req, res) => {
   try {
+    console.log('Search request received:', {
+      query: req.body.query,
+      location: req.body.location,
+      timestamp: new Date().toISOString()
+    });
+
     const { query, location } = req.body;
 
     if (!query) {
+      console.error('Search error: query is empty');
       return res.status(400).json({ error: '搜索查詢不能為空' });
     }
 
     if (!location || !location.lat || !location.lng) {
+      console.error('Search error: location is invalid', location);
       return res.status(400).json({ error: '需要提供位置信息' });
     }
 
@@ -223,51 +241,67 @@ exports.searchRestaurants = async (req, res) => {
     const places = placesResult.results;
 
     // 3. 獲取詳細信息並格式化結果
+    console.log('Processing', places.length, 'places...');
     const restaurants = await Promise.all(
-      places.slice(0, 20).map(async (place) => {
-        const details = await getPlaceDetails(place.place_id);
-        
-        if (!details) return null;
+      places.slice(0, 20).map(async (place, index) => {
+        try {
+          console.log(`Processing place ${index + 1}/${Math.min(places.length, 20)}:`, place.place_id);
+          const details = await getPlaceDetails(place.place_id);
+          
+          if (!details) {
+            console.warn('No details found for place:', place.place_id);
+            return null;
+          }
 
-        // 保存或更新餐廳到數據庫
-        const restaurantData = {
-          placeId: place.place_id,
-          name: details.name,
-          address: details.formatted_address,
-          location: {
-            lat: details.geometry.location.lat,
-            lng: details.geometry.location.lng
-          },
-          rating: details.rating || 0,
-          userRatingsTotal: details.user_ratings_total || 0,
-          priceLevel: details.price_level,
-          types: details.types || [],
-          phoneNumber: details.formatted_phone_number,
-          website: details.website,
-          openingHours: details.opening_hours ? {
-            openNow: details.opening_hours.open_now,
-            weekdayText: details.opening_hours.weekday_text || []
-          } : null
-        };
+          // 保存或更新餐廳到數據庫
+          const restaurantData = {
+            placeId: place.place_id,
+            name: details.name,
+            address: details.formatted_address,
+            location: {
+              lat: details.geometry.location.lat,
+              lng: details.geometry.location.lng
+            },
+            rating: details.rating || 0,
+            userRatingsTotal: details.user_ratings_total || 0,
+            priceLevel: details.price_level,
+            types: details.types || [],
+            phoneNumber: details.formatted_phone_number,
+            website: details.website,
+            openingHours: details.opening_hours ? {
+              openNow: details.opening_hours.open_now,
+              weekdayText: details.opening_hours.weekday_text || []
+            } : null
+          };
 
-        // 如果有照片，獲取照片 URL
-        if (details.photos && details.photos.length > 0) {
-          restaurantData.photos = [
-            `https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photo_reference=${details.photos[0].photo_reference}&key=${GOOGLE_MAPS_API_KEY}`
-          ];
+          // 如果有照片，獲取照片 URL
+          if (details.photos && details.photos.length > 0) {
+            restaurantData.photos = [
+              `https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photo_reference=${details.photos[0].photo_reference}&key=${GOOGLE_MAPS_API_KEY}`
+            ];
+          }
+
+          // 保存到數據庫
+          try {
+            await Restaurant.findOneAndUpdate(
+              { placeId: place.place_id },
+              restaurantData,
+              { upsert: true, new: true }
+            );
+          } catch (dbError) {
+            console.error('Database error for place', place.place_id, ':', dbError.message);
+            // 繼續處理，即使數據庫保存失敗
+          }
+
+          return {
+            ...restaurantData,
+            distance: place.distance || null
+          };
+        } catch (placeError) {
+          console.error(`Error processing place ${place.place_id}:`, placeError.message);
+          console.error('Place error stack:', placeError.stack);
+          return null; // 返回 null，稍後過濾掉
         }
-
-        // 保存到數據庫
-        await Restaurant.findOneAndUpdate(
-          { placeId: place.place_id },
-          restaurantData,
-          { upsert: true, new: true }
-        );
-
-        return {
-          ...restaurantData,
-          distance: place.distance || null
-        };
       })
     );
 
@@ -294,7 +328,20 @@ exports.searchRestaurants = async (req, res) => {
 
   } catch (error) {
     console.error('Search error:', error);
-    res.status(500).json({ error: '搜索失敗，請稍後再試' });
+    console.error('Error message:', error.message);
+    console.error('Error stack:', error.stack);
+    
+    // 返回詳細的錯誤信息（僅在開發環境）
+    const errorResponse = {
+      error: '搜索失敗，請稍後再試',
+      success: false,
+      ...(process.env.NODE_ENV !== 'production' && {
+        details: error.message,
+        stack: error.stack
+      })
+    };
+    
+    res.status(500).json(errorResponse);
   }
 };
 
