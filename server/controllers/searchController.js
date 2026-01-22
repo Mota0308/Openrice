@@ -49,6 +49,80 @@ async function analyzeSearchQuery(query) {
   }
 }
 
+// 使用 AI 分析搜索結果並生成講解
+async function analyzeSearchResults(query, analysis, restaurants) {
+  try {
+    if (!process.env.OPENAI_API_KEY) {
+      console.warn('OPENAI_API_KEY is not set, skipping result analysis');
+      return null;
+    }
+
+    // 構建餐廳摘要信息（限制數量以節省 token）
+    const restaurantSummaries = restaurants.slice(0, 10).map((restaurant, index) => ({
+      index: index + 1,
+      name: restaurant.name,
+      rating: restaurant.rating,
+      priceLevel: restaurant.priceLevel,
+      types: restaurant.types?.slice(0, 3) || [],
+      address: restaurant.address
+    }));
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        {
+          role: "system",
+          content: "你是一個專業的餐廳推薦助手。根據用戶的搜索查詢和搜索結果，生成一份友好的講解，解釋為什麼選擇這些餐廳，每家餐廳的特色，以及哪些菜品或特點符合用戶的搜索要求。使用繁體中文回答，語氣要親切自然。"
+        },
+        {
+          role: "user",
+          content: `用戶搜索：「${query}」
+
+搜索分析：
+- 菜系類型：${analysis.cuisine || '未指定'}
+- 氛圍要求：${analysis.atmosphere || '未指定'}
+- 價格範圍：${analysis.priceRange || '未指定'}
+
+找到的餐廳（共 ${restaurants.length} 家）：
+${JSON.stringify(restaurantSummaries, null, 2)}
+
+請生成一份講解，包括：
+1. 為什麼選擇這幾家餐廳（簡要說明匹配原因）
+2. 每家餐廳的特色（簡要描述，重點突出符合搜索要求的部分）
+3. 推薦理由（為什麼這些餐廳適合用戶的需求）
+
+請以 JSON 格式返回，格式如下：
+{
+  "summary": "整體推薦理由（2-3句話）",
+  "restaurants": [
+    {
+      "index": 1,
+      "name": "餐廳名稱",
+      "highlights": "這家餐廳的特色和符合搜索要求的原因（2-3句話）",
+      "recommendedDishes": "推薦的菜品或特色（如果有的話）"
+    }
+  ]
+}`
+        }
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0.7
+    });
+
+    if (!completion.choices || !completion.choices[0] || !completion.choices[0].message) {
+      throw new Error('Invalid OpenAI response format');
+    }
+
+    const resultAnalysis = JSON.parse(completion.choices[0].message.content);
+    console.log('Search results analysis generated');
+    return resultAnalysis;
+  } catch (error) {
+    console.error('Search results analysis error:', error.message);
+    // 分析失敗不影響搜索結果，返回 null
+    return null;
+  }
+}
+
 // 簡單的關鍵詞提取（備用方案）
 function extractCuisine(query) {
   const cuisines = {
@@ -399,11 +473,22 @@ exports.searchRestaurants = async (req, res) => {
       });
     }
 
+    // 3. 使用 AI 分析搜索結果並生成講解
+    let resultAnalysis = null;
+    try {
+      resultAnalysis = await analyzeSearchResults(query, analysis, validRestaurants);
+      console.log('Result analysis generated:', resultAnalysis ? 'Yes' : 'No');
+    } catch (error) {
+      console.error('Result analysis error (non-blocking):', error.message);
+      // AI 分析失敗不影響搜索結果
+    }
+
     res.json({
       success: true,
       count: validRestaurants.length,
       restaurants: validRestaurants,
-      analysis: analysis
+      analysis: analysis,
+      resultAnalysis: resultAnalysis // AI 生成的結果講解
     });
 
   } catch (error) {

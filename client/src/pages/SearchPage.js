@@ -11,6 +11,7 @@ function SearchPage({ userId }) {
   const [error, setError] = useState(null);
   const [location, setLocation] = useState(null);
   const [searchAnalysis, setSearchAnalysis] = useState(null);
+  const [resultAnalysis, setResultAnalysis] = useState(null); // AI 生成的結果講解
   const [locationInfo, setLocationInfo] = useState(null);
 
   // 獲取用戶位置
@@ -57,6 +58,7 @@ function SearchPage({ userId }) {
     setError(null);
     setRestaurants([]);
     setSearchAnalysis(null);
+    setResultAnalysis(null);
 
     try {
       console.log('Sending search request:', { query, location });
@@ -70,6 +72,7 @@ function SearchPage({ userId }) {
       if (response.data.success) {
         setRestaurants(response.data.restaurants || []);
         setSearchAnalysis(response.data.analysis);
+        setResultAnalysis(response.data.resultAnalysis || null); // AI 生成的結果講解
         
         if (!response.data.restaurants || response.data.restaurants.length === 0) {
           setError('未找到符合條件的餐廳，請嘗試其他搜索關鍵詞');
@@ -128,6 +131,41 @@ function SearchPage({ userId }) {
                 <span className="tag">價格：{searchAnalysis.priceRange}</span>
               )}
             </div>
+          </div>
+        )}
+
+        {resultAnalysis && restaurants.length > 0 && (
+          <div className="result-analysis">
+            <div className="result-analysis-header">
+              <h3>🤖 AI 推薦講解</h3>
+            </div>
+            {resultAnalysis.summary && (
+              <div className="result-summary">
+                <p>{resultAnalysis.summary}</p>
+              </div>
+            )}
+            {resultAnalysis.restaurants && resultAnalysis.restaurants.length > 0 && (
+              <div className="restaurant-highlights">
+                {resultAnalysis.restaurants.map((item, index) => {
+                  const restaurant = restaurants.find((r, i) => i === item.index - 1);
+                  if (!restaurant) return null;
+                  
+                  return (
+                    <div key={index} className="restaurant-highlight-card">
+                      <h4>{item.name}</h4>
+                      {item.highlights && (
+                        <p className="highlight-text">{item.highlights}</p>
+                      )}
+                      {item.recommendedDishes && (
+                        <p className="recommended-dishes">
+                          <strong>推薦：</strong>{item.recommendedDishes}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
