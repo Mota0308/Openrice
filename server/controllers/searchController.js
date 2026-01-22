@@ -924,17 +924,22 @@ async function analyzeSearchQuery(query) {
       throw new Error(`${AI_PROVIDER.toUpperCase()} not configured`);
     }
 
-    const systemPrompt = "你是一個餐廳搜索助手，請『理解用戶意圖』而不是只抽關鍵字。請以 JSON 回傳以下欄位（沒有就給 null 或 []）：\n" +
-      "- cuisine: 菜系（例：日式/火鍋/韓式）\n" +
+    const systemPrompt = "你是一個餐廳搜索助手，請『理解用戶意圖』而不是只抽關鍵字。\n\n" +
+      "【重要規則】\n" +
+      "1. 如果用戶只輸入單一食材（例如：西紅柿、牛肉、海鮮），這不是菜系，而是食材偏好。此時 cuisine 應該為 null，ingredients 應該包含該食材。\n" +
+      "2. 如果用戶輸入的是菜式名稱（例如：拉麵、壽司、火鍋），這可能是 preferredDishes，而不是 cuisine。只有當用戶明確提到菜系類型（例如：日式餐廳、韓式料理）時，才設置 cuisine。\n" +
+      "3. 不要過度推斷。如果用戶只說「西紅柿」，不要推斷為「火鍋」或其他菜系。\n\n" +
+      "請以 JSON 回傳以下欄位（沒有就給 null 或 []）：\n" +
+      "- cuisine: 菜系（例：日式/火鍋/韓式）。**注意**：只有當用戶明確提到菜系類型時才設置，單一食材或菜式名稱不是菜系。\n" +
       "- atmosphere: 氛圍/場合（例：約會/家庭/朋友聚會/商務）\n" +
       "- priceRange: 價格偏好（例：平價/中價位/高檔）\n" +
       "- preferredDishes: 使用者明確想吃的菜式（array，例如：麻辣鍋、壽司、牛排）\n" +
-      "- ingredients: 使用者提到的食材/配料偏好（array，例如：牛肉、海鮮、蔬菜、芝士）\n" +
+      "- ingredients: 使用者提到的食材/配料偏好（array，例如：牛肉、海鮮、蔬菜、芝士、西紅柿）\n" +
       "- dietary: 飲食限制/需求（array，例如：素食、清真、無麩質、低卡、無辣）\n" +
       "- style: 風格偏好（array，例如：精緻、傳統、現代、打卡、安靜）\n" +
       "- occasion: 用餐情境（例：生日/紀念日/工作餐）\n" +
       "- constraints: 其他條件（array，例如：要開到很晚、可訂位、可帶小孩）\n" +
-      "只輸出 JSON 物件。";
+      "只輸出 JSON 物件，不要包含任何其他文字。";
 
     const aiResponse = await callAI(
       [
@@ -1040,9 +1045,43 @@ function extractAtmosphere(query) {
 async function searchGooglePlaces(location, query, analysis) {
   try {
     // 構建搜索關鍵詞
+    // 優先使用用戶原始查詢，只在有明確菜系且原始查詢不是單一食材時才添加菜系
     let searchQuery = query;
-    if (analysis.cuisine) {
+    
+    // 判斷是否為單一食材查詢
+    // 如果只有 ingredients 而沒有 cuisine 和 preferredDishes，很可能是單一食材查詢
+    const isSingleIngredient = !analysis.cuisine && 
+                                !analysis.preferredDishes?.length &&
+                                analysis.ingredients && 
+                                analysis.ingredients.length > 0 &&
+                                query.trim().length <= 15; // 短查詢可能是單一食材
+    
+    console.log('Search query analysis:', {
+      originalQuery: query,
+      cuisine: analysis.cuisine,
+      ingredients: analysis.ingredients,
+      preferredDishes: analysis.preferredDishes,
+      isSingleIngredient: isSingleIngredient
+    });
+    
+    if (isSingleIngredient) {
+      // 單一食材查詢：直接使用原始查詢，不添加菜系前綴
+      // Google Places API 會自動匹配包含該食材的餐廳
+      searchQuery = query;
+      console.log('Detected single ingredient query, using original query:', searchQuery);
+    } else if (analysis.cuisine) {
+      // 有明確菜系：添加菜系前綴
       searchQuery = `${analysis.cuisine} ${query}`;
+      console.log('Added cuisine prefix:', searchQuery);
+    } else if (analysis.preferredDishes && analysis.preferredDishes.length > 0) {
+      // 有明確的菜式偏好：可以添加到查詢中
+      const dishHint = analysis.preferredDishes.slice(0, 1).join(' ');
+      searchQuery = `${query} ${dishHint}`;
+      console.log('Added dish hint:', searchQuery);
+    } else {
+      // 其他情況：直接使用原始查詢
+      searchQuery = query;
+      console.log('Using original query:', searchQuery);
     }
 
     console.log('Searching Google Places (New API) with:', {
