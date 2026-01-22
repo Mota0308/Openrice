@@ -11,6 +11,19 @@ const AI_PROVIDER = process.env.AI_PROVIDER || 'ollama'; // 'ollama', 'openai', 
 const OLLAMA_API_URL = process.env.OLLAMA_API_URL || 'http://localhost:11434';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama2:7b';
 
+function normalizeOllamaBaseUrl(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return s;
+  const noTrailing = s.replace(/\/+$/, '');
+  if (/^https?:\/\//i.test(noTrailing)) return noTrailing;
+  // Railway public domains should use https
+  if (noTrailing.includes('.up.railway.app') || noTrailing.includes('.railway.app')) {
+    return `https://${noTrailing}`;
+  }
+  // Default to http for local/private networking
+  return `http://${noTrailing}`;
+}
+
 // OpenAI 初始化（如果使用）
 const openai = AI_PROVIDER === 'openai' ? new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
@@ -36,6 +49,10 @@ async function callAI(messages, systemPrompt, responseFormat = 'json_object') {
   const provider = AI_PROVIDER.toLowerCase();
   
   if (provider === 'ollama') {
+    const ollamaBaseUrl = normalizeOllamaBaseUrl(OLLAMA_API_URL);
+    if (!ollamaBaseUrl) {
+      throw new Error('OLLAMA_API_URL is empty. Please set it to a valid base URL, e.g. https://<service>.up.railway.app or http://localhost:11434');
+    }
     // 构建 prompt
     let fullPrompt = systemPrompt ? `${systemPrompt}\n\n` : '';
     
@@ -56,9 +73,9 @@ async function callAI(messages, systemPrompt, responseFormat = 'json_object') {
     }
     
     try {
-      console.log(`Calling Ollama API at ${OLLAMA_API_URL} with model ${OLLAMA_MODEL}`);
+      console.log(`Calling Ollama API at ${ollamaBaseUrl} with model ${OLLAMA_MODEL}`);
       
-      const response = await axios.post(`${OLLAMA_API_URL}/api/generate`, {
+      const response = await axios.post(`${ollamaBaseUrl}/api/generate`, {
         model: OLLAMA_MODEL,
         prompt: fullPrompt,
         stream: false,

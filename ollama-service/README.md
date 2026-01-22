@@ -48,6 +48,16 @@ cmd = "ollama serve"
 OLLAMA_MODEL=llama2:7b
 ```
 
+#### ✅ Public Networking（重要）
+
+如果你要用 **Public Networking**（後端用公開域名打 Ollama），需要讓 Ollama 監聽 Railway 的 `$PORT`（否則會出現 502）。
+
+本 repo 已在 `ollama-service/railway.json` 把 start command 設為：
+
+- `OLLAMA_HOST=0.0.0.0:$PORT` 然後 `ollama serve`
+
+所以你**不用**手動設 `OLLAMA_HOST`，除非你改了 start command。
+
 ### 4. 资源要求
 
 ⚠️ **重要**：Ollama 需要大量资源！
@@ -98,6 +108,8 @@ https://ollama-service-production.up.railway.app
 ```
 
 **重要**：Ollama 默认端口是 11434，但 Railway 会自动映射到 80/443。
+
+> 如果你使用本 repo 的配置（`OLLAMA_HOST=0.0.0.0:$PORT`），那麼 Public Domain 會直接對應到 Ollama API（不再是 502）。
 
 ### 8. 测试服务
 
