@@ -58,6 +58,30 @@ OLLAMA_MODEL=llama2:7b
 
 所以你**不用**手動設 `OLLAMA_HOST`，除非你改了 start command。
 
+#### ✅ 模型持久化（非常重要）
+
+如果你發現：
+- `/api/tags` 會忽然變回 `{"models":[]}`  
+- 後端報 `model 'xxx' not found`  
+
+這通常代表 **容器重啟後模型沒有被保存**（沒有掛載持久化 Volume）。
+
+**建議做法：**
+- 在 Railway 的 AI 服務裡新增一個 **Volume**，掛載到：
+  - **Mount Path**：`/root/.ollama`
+
+這樣模型下載一次後就會持久保存，不會每次重啟都要重抓。
+
+#### ✅ 自動下載預設模型（已內建）
+
+本 repo 已加了 `/start.sh`：服務啟動時會檢查是否有模型，沒有就會自動 `ollama pull` 一個小模型（預設 `tinyllama:latest`），避免後端一打就遇到 `model not found`。
+
+你可以在 AI 服務 Variables 設定：
+
+```
+OLLAMA_BOOTSTRAP_MODEL=tinyllama:latest
+```
+
 ### 4. 资源要求
 
 ⚠️ **重要**：Ollama 需要大量资源！
@@ -132,7 +156,7 @@ curl https://your-ollama-service.up.railway.app/api/generate -d '{
 ```
 AI_PROVIDER=ollama
 OLLAMA_API_URL=https://your-ollama-service.up.railway.app
-OLLAMA_MODEL=llama2:7b
+OLLAMA_MODEL=tinyllama:latest
 ```
 
 ## 常见问题

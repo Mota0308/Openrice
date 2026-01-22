@@ -7,7 +7,9 @@ FROM ollama/ollama:latest
 # 我們會在 startCommand 用 OLLAMA_HOST 綁定到 $PORT
 EXPOSE 8080
 
-# Ollama 默认启动命令
-# Railway 会自动运行 ollama serve
-CMD ["ollama", "serve"]
+# Bootstrap model + serve (so /api/generate works after deploy/restart)
+COPY start.sh /start.sh
+RUN chmod +x /start.sh
+
+CMD ["/start.sh"]
 
