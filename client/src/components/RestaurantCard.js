@@ -57,6 +57,12 @@ function RestaurantCard({ restaurant, userId, onRemove }) {
           </p>
         )}
 
+        {(Array.isArray(restaurant.aiEvidenceNotes) && restaurant.aiEvidenceNotes.length > 0) && (
+          <p className="card-ai-evidence">
+            依據：{restaurant.aiEvidenceNotes.slice(0, 2).join('；')}
+          </p>
+        )}
+
         {(Array.isArray(restaurant.aiSuggestedDishes) && restaurant.aiSuggestedDishes.length > 0) && (
           <div className="card-ai-chips">
             <span className="card-ai-chip">可能菜式：{restaurant.aiSuggestedDishes.slice(0, 3).join('、')}</span>

@@ -1,6 +1,7 @@
 const axios = require('axios');
 const OpenAI = require('openai');
 const Restaurant = require('../models/Restaurant');
+const { fetchEvidenceForPlaces } = require('../services/evidenceService');
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
@@ -98,6 +99,36 @@ async function generateResultsExplanation(query, analysis, restaurants) {
       openingHours: r.openingHours
     }));
 
+    // Evidence layer (reviews + website menu snippets). Default: places only; website scrape must be explicitly enabled.
+    const evidenceMap = await fetchEvidenceForPlaces(
+      compactRestaurants.map(r => r.placeId),
+      GOOGLE_MAPS_API_KEY
+    );
+    const evidence = compactRestaurants.map((r) => {
+      const ev = evidenceMap.get(r.placeId);
+      return {
+        placeId: r.placeId,
+        place: ev?.place
+          ? {
+              websiteUri: ev.place.websiteUri,
+              openingNow: ev.place.openingNow,
+              reviews: (ev.place.reviews || []).map((x) => ({
+                rating: x.rating,
+                text: x.text
+              }))
+            }
+          : null,
+        website: ev?.website
+          ? {
+              websiteUrl: ev.website.websiteUrl,
+              menuItems: (ev.website.menuItems || []).slice(0, 12),
+              description: ev.website.base?.description || null,
+              headings: (ev.website.base?.headings || []).slice(0, 6)
+            }
+          : null
+      };
+    });
+
     const completion = await openai.chat.completions.create({
       model: getOpenAIModel(),
       response_format: { type: 'json_object' },
@@ -108,8 +139,10 @@ async function generateResultsExplanation(query, analysis, restaurants) {
             '你是餐廳推薦解說助手，要能「理解用戶意圖」後再解釋為什麼推薦。' +
             '你只能根據輸入的餐廳資料（名稱/地址/評分/價位/類型/營業時間等）與使用者查詢/意圖來解釋；' +
             '不要捏造店家真實菜單、確定的配料、裝潢細節、折扣、服務特色。' +
+            '如果 evidence 提供了「評論片段」或「官網菜單/段落」，你可以引用它們來做更有依據的推論；' +
+            '若沒有證據，請保持保守並標註為推測。' +
             '你可以給「可能適合嘗試」的菜式/配料/風格方向，但必須明確用推測語氣（例如：可能、或許、通常、建議先確認菜單）。' +
-            '輸出 JSON：{summary: string, items: [{placeId: string, reason: string, highlights: string[], suggestedDishes: string[], suggestedIngredients: string[], suggestedStyle: string[], confidence: \"low\"|\"medium\"|\"high\"}], disclaimer: string}。' +
+            '輸出 JSON：{summary: string, items: [{placeId: string, reason: string, highlights: string[], suggestedDishes: string[], suggestedIngredients: string[], suggestedStyle: string[], confidence: \"low\"|\"medium\"|\"high\", evidenceNotes: string[]}], disclaimer: string}。' +
             '每家 reason 1-2 句話，highlights 2-4 點，文字用繁體中文。'
         },
         {
@@ -117,7 +150,8 @@ async function generateResultsExplanation(query, analysis, restaurants) {
           content: JSON.stringify({
             query,
             analysis,
-            restaurants: compactRestaurants
+            restaurants: compactRestaurants,
+            evidence
           })
         }
       ]
@@ -139,7 +173,8 @@ async function generateResultsExplanation(query, analysis, restaurants) {
           suggestedDishes: Array.isArray(it?.suggestedDishes) ? it.suggestedDishes : [],
           suggestedIngredients: Array.isArray(it?.suggestedIngredients) ? it.suggestedIngredients : [],
           suggestedStyle: Array.isArray(it?.suggestedStyle) ? it.suggestedStyle : [],
-          confidence: ['low', 'medium', 'high'].includes(it?.confidence) ? it.confidence : 'low'
+          confidence: ['low', 'medium', 'high'].includes(it?.confidence) ? it.confidence : 'low',
+          evidenceNotes: Array.isArray(it?.evidenceNotes) ? it.evidenceNotes.slice(0, 4) : []
         }))
       : fallback.items;
     return {
@@ -594,7 +629,8 @@ exports.searchRestaurants = async (req, res) => {
           ,
           aiSuggestedIngredients: it?.suggestedIngredients || null,
           aiSuggestedStyle: it?.suggestedStyle || null,
-          aiConfidence: it?.confidence || null
+          aiConfidence: it?.confidence || null,
+          aiEvidenceNotes: it?.evidenceNotes || null
         };
       });
     }

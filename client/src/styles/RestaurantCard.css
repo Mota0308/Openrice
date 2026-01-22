@@ -82,6 +82,12 @@
   padding: 0.5rem 0.75rem;
 }
 
+.card-ai-evidence {
+  margin: -0.25rem 0 0.5rem 0;
+  font-size: 0.85rem;
+  color: #6b5b2b;
+}
+
 .card-ai-label {
   font-weight: 600;
   margin-right: 0.25rem;

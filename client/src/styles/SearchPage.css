@@ -107,6 +107,12 @@
   line-height: 1.5;
 }
 
+.ai-explanation-evidence {
+  margin-top: 0.25rem;
+  font-size: 0.85rem;
+  color: #6b5b2b;
+}
+
 .ai-explanation-meta {
   margin-top: 0.25rem;
 }

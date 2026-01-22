@@ -160,6 +160,11 @@ function SearchPage({ userId }) {
                   {explanation.items.slice(0, 3).map((it) => (
                     <li key={it.placeId}>
                       <div className="ai-explanation-reason">{it.reason}</div>
+                      {(Array.isArray(it.evidenceNotes) && it.evidenceNotes.length > 0) && (
+                        <div className="ai-explanation-evidence">
+                          依據：{it.evidenceNotes.slice(0, 2).join('；')}
+                        </div>
+                      )}
                       {(Array.isArray(it.suggestedDishes) && it.suggestedDishes.length > 0) && (
                         <div className="ai-explanation-meta">
                           <span className="ai-chip">可能菜式：{it.suggestedDishes.slice(0, 3).join('、')}</span>
