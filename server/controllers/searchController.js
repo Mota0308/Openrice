@@ -63,8 +63,8 @@ async function callAI(messages, systemPrompt, responseFormat = 'json_object') {
         prompt: fullPrompt,
         stream: false,
         options: {
-          temperature: 0.7,
-          top_p: 0.9,
+          temperature: 0.85, // 提高多样性（从 0.7 提高到 0.85）
+          top_p: 0.95,       // 提高多样性（从 0.9 提高到 0.95）
           num_predict: 2000, // 限制输出长度
         }
       }, {
@@ -124,7 +124,14 @@ async function callAI(messages, systemPrompt, responseFormat = 'json_object') {
     }
     
     try {
-      const result = await model.generateContent(fullPrompt);
+      const result = await model.generateContent({
+        contents: [{ role: 'user', parts: [{ text: fullPrompt }] }],
+        generationConfig: {
+          temperature: 0.85,  // 提高多样性
+          topP: 0.95,        // 提高多样性
+          maxOutputTokens: 2000,
+        },
+      });
       const response = await result.response;
       const text = response.text();
       
@@ -162,6 +169,8 @@ async function callAI(messages, systemPrompt, responseFormat = 'json_object') {
     try {
       const completion = await openai.chat.completions.create({
         model: getOpenAIModel(),
+        temperature: 0.85,  // 提高多样性
+        top_p: 0.95,        // 提高多样性
         response_format: responseFormat === 'json_object' ? { type: 'json_object' } : undefined,
         messages: formattedMessages
       });
@@ -218,6 +227,51 @@ function simpleHash(str) {
 
 function pickTop(arr, n) {
   return (Array.isArray(arr) ? arr : []).filter(Boolean).slice(0, n);
+}
+
+// 检查并确保 AI 解释的多样性
+function ensureDiversity(items) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return items;
+  }
+
+  // 检查 reason 开头的多样性
+  const reasonStarters = items.map(item => {
+    const reason = item?.reason || '';
+    // 提取前 15 个字符作为"开头"
+    return reason.substring(0, 15).trim().toLowerCase();
+  });
+
+  const uniqueStarters = new Set(reasonStarters);
+  const diversityRatio = uniqueStarters.size / reasonStarters.length;
+
+  if (diversityRatio < 0.6) {
+    console.warn(`Warning: Reason diversity is low (${(diversityRatio * 100).toFixed(1)}%). Consider regenerating.`);
+    console.warn('Reason starters:', Array.from(uniqueStarters).slice(0, 5));
+  } else {
+    console.log(`Reason diversity: ${(diversityRatio * 100).toFixed(1)}% (${uniqueStarters.size}/${reasonStarters.length} unique)`);
+  }
+
+  // 检查 highlights 的多样性（检查是否有太多重复的 highlights）
+  const allHighlights = items.flatMap(item => item?.highlights || []);
+  const highlightCounts = new Map();
+  allHighlights.forEach(h => {
+    const key = h.trim().toLowerCase().substring(0, 20);
+    highlightCounts.set(key, (highlightCounts.get(key) || 0) + 1);
+  });
+
+  const repeatedHighlights = Array.from(highlightCounts.entries())
+    .filter(([_, count]) => count > 2)
+    .map(([key, count]) => ({ key, count }));
+
+  if (repeatedHighlights.length > 0) {
+    console.warn(`Warning: Found ${repeatedHighlights.length} frequently repeated highlights`);
+    repeatedHighlights.slice(0, 3).forEach(({ key, count }) => {
+      console.warn(`  - "${key}..." appears ${count} times`);
+    });
+  }
+
+  return items;
 }
 
 function asArrayOfStrings(value) {
@@ -340,10 +394,11 @@ async function generateResultsExplanation(query, analysis, restaurants) {
       console.warn('Evidence error stack:', evidenceErr.stack);
       // Continue without evidence - don't break the search
     }
-    const evidence = compactRestaurants.map((r) => {
+    const evidence = compactRestaurants.map((r, index) => {
       const ev = evidenceMap.get(r.placeId);
       return {
         placeId: r.placeId,
+        restaurantIndex: index, // 添加索引，让 AI 知道这是第几家，用于生成不同的表达方式
         place: ev?.place
           ? {
               websiteUri: ev.place.websiteUri,
@@ -384,21 +439,71 @@ async function generateResultsExplanation(query, analysis, restaurants) {
     try {
       console.log(`Calling ${AI_PROVIDER.toUpperCase()} API for explanation...`);
       
-      const systemPrompt = '你是餐廳推薦解說助手，要能「理解用戶意圖」後再解釋為什麼推薦。' +
-        '你只能根據輸入的餐廳資料（名稱/地址/評分/價位/類型/營業時間等）與使用者查詢/意圖來解釋；' +
-        '不要捏造店家真實菜單、確定的配料、裝潢細節、折扣、服務特色。' +
-        '如果 evidence 提供了「評論片段」或「官網菜單/段落」，你可以引用它們來做更有依據的推論；' +
-        '若沒有證據，請保持保守並標註為推測。' +
-        '【強制】每家餐廳的 highlights 必須包含至少 1 條「具體內容」：' +
-        '優先使用 evidence.website.menuItems / evidence.website.menuCandidates 的菜名；' +
-        '或引用 evidence.place.editorialSummary 的關鍵片語；' +
-        '或引用 evidence.place.reviews 的一小段（不要超過 20 字）。' +
-        '如果真的完全沒有任何具體證據，才可以用「類型/價位/是否營業」等資訊，但此時 confidence 必須是 low，且不要把評分當作主亮點。' +
-        '你可以給「可能適合嘗試」的菜式/配料/風格方向，但必須明確用推測語氣（例如：可能、或許、通常、建議先確認菜單）。' +
-        '【重要】避免模板化：每家餐廳的 reason 句式要有差異，不要全部只寫「評分高/評價多」。' +
-        '每家至少涵蓋 2 個角度（從：用戶意圖匹配、可能菜式/配料、風格/氛圍、評論證據、官網菜單證據、價位、是否營業中、類型匹配、熱度）。' +
-        '輸出 JSON：{summary: string, items: [{placeId: string, reason: string, highlights: string[], suggestedDishes: string[], suggestedIngredients: string[], suggestedStyle: string[], confidence: \"low\"|\"medium\"|\"high\", evidenceNotes: string[]}], disclaimer: string}。' +
-        '每家 reason 1-2 句話，highlights 3-5 點（要多樣化），文字用繁體中文。';
+      const systemPrompt = '你是餐廳推薦解說助手，要能「理解用戶意圖」後再解釋為什麼推薦。\n\n' +
+        '【核心原則】每間餐廳的解釋必須獨特且多樣化，絕對不能使用相同的句式或模板。\n\n' +
+        
+        '【多樣性要求 - 嚴格執行】\n' +
+        '1. 每家餐廳的 reason 必須使用不同的開頭和句式：\n' +
+        '   - 第1家（restaurantIndex=0）：可以用「這家餐廳...」「這間店...」開頭\n' +
+        '   - 第2家（restaurantIndex=1）：用「如果你想要...」「考慮到你的需求...」開頭\n' +
+        '   - 第3家（restaurantIndex=2）：用「特別推薦...」「值得一試的是...」開頭\n' +
+        '   - 第4家（restaurantIndex=3）：用「這間店...」「這家...」開頭\n' +
+        '   - 第5家（restaurantIndex=4）：用「考慮到...」「基於你的偏好...」開頭\n' +
+        '   - 第6家及以後：繼續變化，可以用「另一個選擇是...」「如果你喜歡...」「這裡的...」等\n' +
+        '   每家用不同的表達方式，絕對不要重複相同的開頭。\n\n' +
+        
+        '2. 每家餐廳的 highlights 必須從不同角度切入，每家用不同的角度組合：\n' +
+        '   - 角度1：菜式特色（如果有證據，優先使用）\n' +
+        '   - 角度2：氛圍/環境/風格\n' +
+        '   - 角度3：價位/性價比\n' +
+        '   - 角度4：評論中的具體反饋（引用評論片段）\n' +
+        '   - 角度5：營業狀態/便利性/位置\n' +
+        '   - 角度6：類型匹配度/符合需求\n' +
+        '   - 角度7：熱度/人氣/評價數\n' +
+        '   每家至少涵蓋 3-4 個不同角度，不要重複相同角度組合。\n\n' +
+        
+        '3. 避免重複用詞，用不同的詞彙表達相同概念：\n' +
+        '   - 評分高 → 口碑不錯 / 評價良好 / 獲得高分 / 深受好評 / 評分亮眼\n' +
+        '   - 評價多 → 人氣旺 / 討論度高 / 受歡迎 / 評價豐富 / 熱門選擇\n' +
+        '   - 類型匹配 → 符合你的需求 / 貼近你的偏好 / 正是你要找的 / 符合條件\n' +
+        '   - 營業中 → 目前營業 / 正在營業 / 現在開門 / 可立即前往\n' +
+        '   每家用不同的詞彙，避免重複。\n\n' +
+        
+        '4. 每家的 reason 長度和結構要有變化：\n' +
+        '   - 有些用 1 句話簡潔說明（例如：第1、3、5家）\n' +
+        '   - 有些用 2 句話詳細解釋（例如：第2、4、6家）\n' +
+        '   - 有些先說優點再說原因\n' +
+        '   - 有些先說原因再說優點\n' +
+        '   - 有些用並列結構，有些用因果結構\n\n' +
+        
+        '5. 根據 restaurantIndex 調整表達風格：\n' +
+        '   - Index 0-2：可以用較正式的語氣\n' +
+        '   - Index 3-5：可以用較輕鬆的語氣\n' +
+        '   - Index 6+：可以用較親切的語氣\n' +
+        '   讓每家的語氣都有細微差異。\n\n' +
+        
+        '【證據使用】\n' +
+        '你只能根據輸入的餐廳資料（名稱/地址/評分/價位/類型/營業時間等）與使用者查詢/意圖來解釋；\n' +
+        '不要捏造店家真實菜單、確定的配料、裝潢細節、折扣、服務特色。\n' +
+        '如果 evidence 提供了「評論片段」或「官網菜單/段落」，你可以引用它們來做更有依據的推論；\n' +
+        '若沒有證據，請保持保守並標註為推測。\n\n' +
+        
+        '【強制要求】\n' +
+        '每家餐廳的 highlights 必須包含至少 1 條「具體內容」：\n' +
+        '- 優先使用 evidence.website.menuItems / evidence.website.menuCandidates 的菜名；\n' +
+        '- 或引用 evidence.place.editorialSummary 的關鍵片語；\n' +
+        '- 或引用 evidence.place.reviews 的一小段（不要超過 20 字）。\n' +
+        '如果真的完全沒有任何具體證據，才可以用「類型/價位/是否營業」等資訊，但此時 confidence 必須是 low，且不要把評分當作主亮點。\n\n' +
+        
+        '你可以給「可能適合嘗試」的菜式/配料/風格方向，但必須明確用推測語氣（例如：可能、或許、通常、建議先確認菜單）。\n\n' +
+        
+        '【輸出格式】\n' +
+        '輸出 JSON：{summary: string, items: [{placeId: string, reason: string, highlights: string[], suggestedDishes: string[], suggestedIngredients: string[], suggestedStyle: string[], confidence: "low"|"medium"|"high", evidenceNotes: string[]}], disclaimer: string}\n' +
+        '每家 reason 1-2 句話，highlights 3-5 點（必須多樣化，不能重複），文字用繁體中文。\n\n' +
+        
+        '【最後提醒】\n' +
+        '記住：每間餐廳都是獨特的，你的解釋也必須是獨特的。絕對不要使用模板化的表達方式。\n' +
+        '根據 restaurantIndex 使用不同的開頭、角度、詞彙和結構，讓每家的解釋都與眾不同。';
       
       aiResponse = await callAI(
         [
@@ -457,9 +562,13 @@ async function generateResultsExplanation(query, analysis, restaurants) {
           evidenceNotes: Array.isArray(it?.evidenceNotes) ? it.evidenceNotes.slice(0, 4) : []
         }))
       : fallback.items;
+    
+    // 检查并确保多样性
+    const diverseItems = ensureDiversity(normalizedItems);
+    
     return {
       summary: parsed.summary || fallback.summary,
-      items: normalizedItems,
+      items: diverseItems,
       disclaimer:
         parsed.disclaimer ||
         '提示：Google Places 不提供完整菜單/食材資訊；「菜式/配料/風格」多為推測與常見搭配方向，實際以店家菜單與現場為準。'
