@@ -84,7 +84,7 @@ function extractAtmosphere(query) {
   return null;
 }
 
-// 使用 Google Places API 搜索餐廳
+// 使用 Google Places API (New) 搜索餐廳
 async function searchGooglePlaces(location, query, analysis) {
   try {
     // 構建搜索關鍵詞
@@ -93,77 +93,141 @@ async function searchGooglePlaces(location, query, analysis) {
       searchQuery = `${analysis.cuisine} ${query}`;
     }
 
-    console.log('Searching Google Places with:', {
+    console.log('Searching Google Places (New API) with:', {
       query: searchQuery,
       location: `${location.lat},${location.lng}`,
       radius: 5000
     });
 
-    // 使用 Text Search API
-    const response = await axios.get('https://maps.googleapis.com/maps/api/place/textsearch/json', {
-      params: {
-        query: searchQuery,
-        location: `${location.lat},${location.lng}`,
-        radius: 5000, // 5km 範圍
-        type: 'restaurant',
-        key: GOOGLE_MAPS_API_KEY,
-        language: 'zh-TW'
+    // 使用新的 Places API (New) - Text Search
+    // 注意：新 API 需要启用 Places API (New) 而不是旧的 Places API
+    const response = await axios.post(
+      'https://places.googleapis.com/v1/places:searchText',
+      {
+        textQuery: searchQuery,
+        maxResultCount: 20,
+        locationBias: {
+          circle: {
+            center: {
+              latitude: location.lat,
+              longitude: location.lng
+            },
+            radius: 5000.0 // 5km in meters
+          }
+        },
+        includedType: 'restaurant',
+        languageCode: 'zh-TW'
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': GOOGLE_MAPS_API_KEY,
+          'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.priceLevel,places.types,places.photos,places.nationalPhoneNumber,places.websiteUri,places.regularOpeningHours,places.currentOpeningHours'
+        }
       }
+    );
+
+    console.log('Google Places API (New) response:', {
+      resultsCount: response.data.places ? response.data.places.length : 0
     });
 
-    console.log('Google Places API response status:', response.data.status);
-    console.log('Google Places API response:', {
-      status: response.data.status,
-      resultsCount: response.data.results ? response.data.results.length : 0,
-      errorMessage: response.data.error_message
-    });
+    // 新 API 返回格式不同
+    if (response.data.places && response.data.places.length > 0) {
+      // 转换新 API 格式到旧格式，以便后续处理
+      const convertedResults = response.data.places.map(place => ({
+        place_id: place.id,
+        name: place.displayName?.text || '',
+        formatted_address: place.formattedAddress || '',
+        geometry: {
+          location: {
+            lat: place.location?.latitude || location.lat,
+            lng: place.location?.longitude || location.lng
+          }
+        },
+        rating: place.rating || 0,
+        user_ratings_total: place.userRatingCount || 0,
+        price_level: place.priceLevel || null,
+        types: place.types || [],
+        photos: place.photos || [],
+        formatted_phone_number: place.nationalPhoneNumber || null,
+        website: place.websiteUri || null,
+        opening_hours: place.regularOpeningHours || place.currentOpeningHours || null
+      }));
 
-    // 處理不同的 API 狀態
-    if (response.data.status === 'OK') {
-      return { success: true, results: response.data.results };
-    } else if (response.data.status === 'ZERO_RESULTS') {
+      return { success: true, results: convertedResults };
+    } else {
       console.log('No results found for query:', searchQuery);
       return { success: true, results: [], message: '未找到符合條件的餐廳' };
-    } else if (response.data.status === 'REQUEST_DENIED') {
-      console.error('Google Places API REQUEST_DENIED:', response.data.error_message);
-      throw new Error(`API 請求被拒絕: ${response.data.error_message || '請檢查 API 密鑰和權限設置'}`);
-    } else if (response.data.status === 'OVER_QUERY_LIMIT') {
-      console.error('Google Places API OVER_QUERY_LIMIT');
-      throw new Error('API 配額已用完，請稍後再試');
-    } else if (response.data.status === 'INVALID_REQUEST') {
-      console.error('Google Places API INVALID_REQUEST:', response.data.error_message);
-      throw new Error(`無效的請求: ${response.data.error_message || '請檢查搜索參數'}`);
-    } else {
-      console.error('Google Places API error:', response.data.status, response.data.error_message);
-      throw new Error(`API 錯誤: ${response.data.status} - ${response.data.error_message || '未知錯誤'}`);
     }
   } catch (error) {
-    console.error('Google Places API request error:', error.message);
+    console.error('Google Places API (New) request error:', error.message);
     if (error.response) {
-      console.error('API Response:', error.response.data);
+      console.error('API Response status:', error.response.status);
+      console.error('API Response data:', JSON.stringify(error.response.data, null, 2));
+      
+      // 处理新 API 的错误格式
+      if (error.response.data?.error) {
+        const apiError = error.response.data.error;
+        if (apiError.message?.includes('API key not valid') || apiError.message?.includes('permission denied')) {
+          throw new Error(`API 請求被拒絕: ${apiError.message || '請檢查 API 密鑰和權限設置'}`);
+        } else if (apiError.message?.includes('quota') || apiError.message?.includes('limit')) {
+          throw new Error('API 配額已用完，請稍後再試');
+        } else {
+          throw new Error(`API 錯誤: ${apiError.message || '未知錯誤'}`);
+        }
+      }
     }
     throw error; // 重新拋出錯誤，讓上層處理
   }
 }
 
-// 獲取餐廳詳細信息
+// 獲取餐廳詳細信息 (使用新的 Places API)
 async function getPlaceDetails(placeId) {
   try {
-    const response = await axios.get('https://maps.googleapis.com/maps/api/place/details/json', {
-      params: {
-        place_id: placeId,
-        fields: 'name,formatted_address,geometry,rating,user_ratings_total,price_level,types,photos,formatted_phone_number,website,opening_hours',
-        key: GOOGLE_MAPS_API_KEY,
-        language: 'zh-TW'
+    // 使用新的 Places API (New) - Get Place
+    const response = await axios.get(
+      `https://places.googleapis.com/v1/places/${placeId}`,
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': GOOGLE_MAPS_API_KEY,
+          'X-Goog-FieldMask': 'id,displayName,formattedAddress,location,rating,userRatingCount,priceLevel,types,photos,nationalPhoneNumber,websiteUri,regularOpeningHours,currentOpeningHours'
+        },
+        params: {
+          languageCode: 'zh-TW'
+        }
       }
-    });
+    );
 
-    if (response.data.status === 'OK') {
-      return response.data.result;
+    if (response.data) {
+      // 转换新 API 格式到旧格式
+      const place = response.data;
+      return {
+        place_id: place.id,
+        name: place.displayName?.text || '',
+        formatted_address: place.formattedAddress || '',
+        geometry: {
+          location: {
+            lat: place.location?.latitude || 0,
+            lng: place.location?.longitude || 0
+          }
+        },
+        rating: place.rating || 0,
+        user_ratings_total: place.userRatingCount || 0,
+        price_level: place.priceLevel || null,
+        types: place.types || [],
+        photos: place.photos || [],
+        formatted_phone_number: place.nationalPhoneNumber || null,
+        website: place.websiteUri || null,
+        opening_hours: place.regularOpeningHours || place.currentOpeningHours || null
+      };
     }
     return null;
   } catch (error) {
-    console.error('Place Details API error:', error);
+    console.error('Place Details API (New) error:', error.message);
+    if (error.response) {
+      console.error('API Response:', error.response.data);
+    }
     return null;
   }
 }
@@ -240,45 +304,53 @@ exports.searchRestaurants = async (req, res) => {
 
     const places = placesResult.results;
 
-    // 3. 獲取詳細信息並格式化結果
+    // 3. 格式化結果（新 API 已经返回了足够的信息，不需要额外调用 getPlaceDetails）
     console.log('Processing', places.length, 'places...');
     const restaurants = await Promise.all(
       places.slice(0, 20).map(async (place, index) => {
         try {
           console.log(`Processing place ${index + 1}/${Math.min(places.length, 20)}:`, place.place_id);
-          const details = await getPlaceDetails(place.place_id);
-          
-          if (!details) {
-            console.warn('No details found for place:', place.place_id);
-            return null;
-          }
 
-          // 保存或更新餐廳到數據庫
+          // 新 API 的 searchText 已经返回了详细信息，直接使用
           const restaurantData = {
             placeId: place.place_id,
-            name: details.name,
-            address: details.formatted_address,
+            name: place.name || '',
+            address: place.formatted_address || '',
             location: {
-              lat: details.geometry.location.lat,
-              lng: details.geometry.location.lng
+              lat: place.geometry.location.lat,
+              lng: place.geometry.location.lng
             },
-            rating: details.rating || 0,
-            userRatingsTotal: details.user_ratings_total || 0,
-            priceLevel: details.price_level,
-            types: details.types || [],
-            phoneNumber: details.formatted_phone_number,
-            website: details.website,
-            openingHours: details.opening_hours ? {
-              openNow: details.opening_hours.open_now,
-              weekdayText: details.opening_hours.weekday_text || []
+            rating: place.rating || 0,
+            userRatingsTotal: place.user_ratings_total || 0,
+            priceLevel: place.price_level || null,
+            types: place.types || [],
+            phoneNumber: place.formatted_phone_number || null,
+            website: place.website || null,
+            openingHours: place.opening_hours ? {
+              openNow: place.opening_hours.open_now || false,
+              weekdayText: place.opening_hours.weekday_text || []
             } : null
           };
 
           // 如果有照片，獲取照片 URL
-          if (details.photos && details.photos.length > 0) {
-            restaurantData.photos = [
-              `https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photo_reference=${details.photos[0].photo_reference}&key=${GOOGLE_MAPS_API_KEY}`
-            ];
+          // 新 API 的照片格式：photos[0].name 或 photos[0].uri
+          if (place.photos && place.photos.length > 0) {
+            const photo = place.photos[0];
+            // 新 API 使用 name 字段，格式为 "places/{place_id}/photos/{photo_id}"
+            if (photo.name) {
+              // 使用新的照片 API
+              restaurantData.photos = [
+                `https://places.googleapis.com/v1/${photo.name}/media?maxWidthPx=400&key=${GOOGLE_MAPS_API_KEY}`
+              ];
+            } else if (photo.uri) {
+              // 如果直接提供 URI
+              restaurantData.photos = [photo.uri];
+            } else if (photo.photo_reference) {
+              // 兼容旧格式
+              restaurantData.photos = [
+                `https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photo_reference=${photo.photo_reference}&key=${GOOGLE_MAPS_API_KEY}`
+              ];
+            }
           }
 
           // 保存到數據庫
