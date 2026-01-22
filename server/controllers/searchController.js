@@ -654,7 +654,10 @@ async function generateResultsExplanation(query, analysis, restaurants) {
       return buildFallbackExplanation(query, analysis, restaurants);
     }
 
-    const compactRestaurants = restaurants.slice(0, 12).map(r => ({
+    // 处理所有餐厅，确保每间餐厅都有 AI 解释
+    // 如果餐厅数量太多，可以分批处理，但这里先处理所有餐厅
+    const maxRestaurants = Number(process.env.MAX_RESTAURANTS_FOR_EXPLANATION || 20); // 默认最多 20 间
+    const compactRestaurants = restaurants.slice(0, maxRestaurants).map(r => ({
       placeId: r.placeId,
       name: r.name,
       address: r.address,
@@ -665,7 +668,7 @@ async function generateResultsExplanation(query, analysis, restaurants) {
       openingHours: r.openingHours
     }));
 
-    console.log('Generating explanation for', compactRestaurants.length, 'restaurants');
+    console.log(`Generating explanation for ${compactRestaurants.length} restaurants (out of ${restaurants.length} total)`);
 
     // Evidence layer (reviews + website menu snippets). Default: places only; website scrape must be explicitly enabled.
     let evidenceMap = new Map();
@@ -898,9 +901,42 @@ async function generateResultsExplanation(query, analysis, restaurants) {
       analysis?.cuisine || null
     );
     
+    // 确保所有餐厅都有解释：如果 AI 没有为某些餐厅生成解释，使用 fallback
+    const itemsMap = new Map(restaurantSpecificItems.map(item => [item.placeId, item]));
+    const fallbackItemsMap = new Map(fallback.items.map(item => [item.placeId, item]));
+    
+    // 为所有餐厅生成解释（优先使用 AI 生成的，如果没有则使用 fallback）
+    const allItems = compactRestaurants.map(r => {
+      const aiItem = itemsMap.get(r.placeId);
+      if (aiItem) {
+        return aiItem;
+      }
+      // 如果 AI 没有为这个餐厅生成解释，使用 fallback
+      const fallbackItem = fallbackItemsMap.get(r.placeId);
+      if (fallbackItem) {
+        return fallbackItem;
+      }
+      // 如果 fallback 也没有，创建一个基本的解释
+      return {
+        placeId: r.placeId,
+        reason: `這家餐廳符合你的搜索條件。`,
+        highlights: [
+          r.rating ? `評分：${Number(r.rating).toFixed(1)}` : null,
+          r.userRatingsTotal ? `評價：${r.userRatingsTotal}` : null,
+          normalizePriceLevel(r.priceLevel) !== null ? `價位：${'$'.repeat(normalizePriceLevel(r.priceLevel))}` : null,
+          r.openingHours?.openNow === true ? '目前顯示營業中' : null
+        ].filter(Boolean),
+        suggestedDishes: inferFallbackDishesFromNameAndTypes(r, analysis?.cuisine || null),
+        suggestedIngredients: [],
+        suggestedStyle: [],
+        confidence: 'low',
+        evidenceNotes: []
+      };
+    });
+    
     return {
       summary: parsed.summary || fallback.summary,
-      items: restaurantSpecificItems,
+      items: allItems, // 确保所有餐厅都有解释
       disclaimer:
         parsed.disclaimer ||
         '提示：Google Places 不提供完整菜單/食材資訊；「菜式/配料/風格」多為推測與常見搭配方向，實際以店家菜單與現場為準。'
