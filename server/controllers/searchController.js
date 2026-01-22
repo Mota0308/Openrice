@@ -476,9 +476,19 @@ function applyRestaurantSpecificSuggestions(items, evidenceArr, restaurantsArr, 
     const ev = placeId ? evidenceById.get(placeId) : null;
     const r = placeId ? restaurantById.get(placeId) : null;
 
-    const menuItems = uniqStrings(ev?.website?.menuItems);
-    const menuCandidates = uniqStrings(ev?.website?.menuCandidates);
-    const candidates = uniqStrings(menuItems.concat(menuCandidates)).filter((x) => !isGenericDishName(x));
+    // 按优先级收集菜品证据（方案 B + C）
+    const dishesFromReviews = uniqStrings(ev?.place?.dishesFromReviews || []); // 最高优先级：从评论提取
+    const menuImageItems = uniqStrings(ev?.website?.menuImageItems || []); // 第二优先级：从图片 OCR 提取
+    const menuItems = uniqStrings(ev?.website?.menuItems || []);
+    const menuCandidates = uniqStrings(ev?.website?.menuCandidates || []);
+    
+    // 按优先级合并：评论提取 > 图片 OCR > 网站菜单 > 网站候选项
+    const candidates = uniqStrings(
+      dishesFromReviews
+        .concat(menuImageItems)
+        .concat(menuItems)
+        .concat(menuCandidates)
+    ).filter((x) => !isGenericDishName(x));
 
     // If we have restaurant-specific evidence, always prefer that.
     if (candidates.length > 0) {
@@ -697,7 +707,8 @@ async function generateResultsExplanation(query, analysis, restaurants) {
               reviews: (ev.place.reviews || []).map((x) => ({
                 rating: x.rating,
                 text: x.text
-              }))
+              })),
+              dishesFromReviews: (ev.place.dishesFromReviews || []).slice(0, 10) // 方案 C: 从评论提取的菜品
             }
           : null,
         website: ev?.website
@@ -705,6 +716,7 @@ async function generateResultsExplanation(query, analysis, restaurants) {
               websiteUrl: ev.website.websiteUrl,
               menuItems: (ev.website.menuItems || []).slice(0, 12),
               menuCandidates: (ev.website.menuCandidates || []).slice(0, 12),
+              menuImageItems: (ev.website.menuImageItems || []).slice(0, 10), // 方案 B: 从图片 OCR 提取的菜品
               description: ev.website.base?.description || null,
               headings: (ev.website.base?.headings || []).slice(0, 6)
             }
@@ -765,23 +777,49 @@ async function generateResultsExplanation(query, analysis, restaurants) {
         '如果 evidence 提供了「評論片段」或「官網菜單/段落」，你可以引用它們來做更有依據的推論；\n' +
         '若沒有證據，請保持保守並標註為推測。\n\n' +
         
-        '【強制要求】\n' +
-        '每家餐廳的 highlights 必須包含至少 1 條「具體內容」：\n' +
-        '- 優先使用 evidence.website.menuItems / evidence.website.menuCandidates 的菜名；\n' +
-        '- 或引用 evidence.place.editorialSummary 的關鍵片語；\n' +
-        '- 或引用 evidence.place.reviews 的一小段（不要超過 20 字）。\n' +
-        '如果真的完全沒有任何具體證據，才可以用「類型/價位/是否營業」等資訊，但此時 confidence 必須是 low，且不要把評分當作主亮點。\n\n' +
+        '【菜品優先原則 - 嚴格執行】\n' +
+        '1. **必須優先使用 evidence 中的具體菜品信息**（按優先級排序）：\n' +
+        '   - **最高優先級**：evidence.place.dishesFromReviews（從評論中提取的菜品，最真實可靠）\n' +
+        '   - **第二優先級**：evidence.website.menuImageItems（從餐牌圖片 OCR 提取的菜品）\n' +
+        '   - **第三優先級**：evidence.website.menuItems（從網站 JSON-LD 提取的菜單項）\n' +
+        '   - **第四優先級**：evidence.website.menuCandidates（從網站 HTML 解析的菜品候選）\n' +
+        '   - **第五優先級**：從 evidence.place.reviews 的評論文本中提取明確提到的菜品（例如：「我點了拉麵和壽司」、「推薦他們的燒肉」）\n' +
+        '\n' +
+        '2. **從評論中提取菜品**：\n' +
+        '   - 仔細閱讀 evidence.place.reviews 的每一條評論\n' +
+        '   - 提取評論中明確提到的菜品名稱（例如：「我點了拉麵和壽司」、「推薦他們的燒肉」、「必點 XXX」）\n' +
+        '   - 如果評論中提到價格格式（例如：「XXX $88」），左側部分通常是菜品名稱\n' +
+        '   - 將這些菜品名稱加入到 suggestedDishes 中，優先使用 evidence.place.dishesFromReviews\n' +
+        '\n' +
+        '3. **每家餐廳的 highlights 必須包含至少 1 條「具體菜品內容」**：\n' +
+        '   - 優先引用 evidence.place.dishesFromReviews 中的菜品（例如：「評論中多次提到：拉麵、壽司」）\n' +
+        '   - 或引用 evidence.website.menuImageItems 中的菜品（例如：「餐牌顯示：燒肉、火鍋」）\n' +
+        '   - 或引用 evidence.website.menuItems 中的菜品\n' +
+        '   - 或引用 evidence.place.reviews 中明確提到的菜品（例如：「評論推薦：XXX」）\n' +
+        '   - 如果真的完全沒有任何菜品證據，才可以用「類型/價位/是否營業」等資訊，但此時 confidence 必須是 low\n\n' +
         
         '【菜式/配料輸出規則（用來解決「每家都一樣」）】\n' +
-        '1. suggestedDishes 必須「店家專屬」：\n' +
-        '   - 若 evidence.website.menuItems 或 evidence.website.menuCandidates 有內容：請從該店清單中挑 2-4 個最貼近用戶意圖的菜名；不同餐廳之間不要重複同一組菜名。\n' +
-        '   - 若沒有官網菜單候選：可用評論片段/摘要推斷；或直接從餐廳名稱中抽取明顯的菜式關鍵詞（例如：羊肉粉、牛腩麵、拉麵、壽司、燒鳥、烤肉、火鍋）作為其中 1-2 項。\n' +
-        '     以上推斷必須用推測語氣，且不同餐廳不要重複同一組。\n' +
-        '   - 禁止輸出過於泛用的詞（例如：招牌菜、熱門主食、特色小食、甜品、飲品、拼盤、套餐）。\n' +
+        '1. suggestedDishes 必須「店家專屬」且「優先使用證據中的真實菜品」：\n' +
+        '   - **第一優先**：使用 evidence.place.dishesFromReviews（從評論提取，最可靠）\n' +
+        '   - **第二優先**：使用 evidence.website.menuImageItems（從餐牌圖片 OCR 提取）\n' +
+        '   - **第三優先**：使用 evidence.website.menuItems 或 evidence.website.menuCandidates\n' +
+        '   - **第四優先**：從 evidence.place.reviews 的評論文本中提取明確提到的菜品\n' +
+        '   - **最後備選**：從餐廳名稱中抽取明顯的菜式關鍵詞（例如：羊肉粉、牛腩麵、拉麵、壽司）\n' +
+        '   - 不同餐廳之間不要重複同一組菜名\n' +
+        '   - **絕對禁止**輸出「招牌菜」、「熱門主食」、「特色小食」、「甜品」、「飲品」、「拼盤」、「套餐」等泛用詞\n' +
+        '   - 每道菜名長度不超過 12 個字\n' +
+        '\n' +
         '2. suggestedIngredients 同理：\n' +
         '   - 若菜名/評論中明顯包含食材詞可提取（例如：牛肉、海鮮、芝士、豚骨、麻辣等），可列 2-4 個；\n' +
-        '   - 沒有證據就留空陣列 []，不要硬編。\n\n' +
-        
+        '   - 優先從 evidence 中的菜品名稱提取食材（例如：從「牛肉拉麵」提取「牛肉」）\n' +
+        '   - 沒有證據就留空陣列 []，不要硬編。\n' +
+        '\n' +
+        '3. **evidenceNotes 必須標註使用了哪些證據**：\n' +
+        '   - 如果使用了 evidence.place.dishesFromReviews，標註：「根據評論提取：XXX、XXX」\n' +
+        '   - 如果使用了 evidence.website.menuImageItems，標註：「餐牌圖片顯示：XXX、XXX」\n' +
+        '   - 如果使用了 evidence.website.menuItems，標註：「官網菜單：XXX、XXX」\n' +
+        '   - 如果引用了評論，標註：「評論提到：XXX」\n' +
+        '\n' +
         '你可以給「可能適合嘗試」的菜式/配料/風格方向，但必須明確用推測語氣（例如：可能、或許、通常、建議先確認菜單）。\n\n' +
         
         '【輸出格式】\n' +
